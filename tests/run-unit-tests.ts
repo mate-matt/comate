@@ -3,10 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
 import { LibraryService } from "../src/server/application/libraryService.js";
 import { CodexImageScanner } from "../src/server/infrastructure/codexImageScanner.js";
 import { CodexSessionRepository } from "../src/server/infrastructure/codexSessionRepository.js";
 import { SqliteImageIndex } from "../src/server/infrastructure/sqliteImageIndex.js";
+import { SearchOverlay } from "../src/web/components/SearchOverlay.js";
+import { Sidebar } from "../src/web/components/Sidebar.js";
 
 const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
@@ -16,6 +21,8 @@ async function main(): Promise<void> {
   try {
     await testScannerSessionMergeAndIndex(root);
     console.log("ok scanner/session/index");
+    testSearchUiRendering();
+    console.log("ok web/search-ui");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -99,6 +106,56 @@ async function testScannerSessionMergeAndIndex(root: string): Promise<void> {
   } finally {
     index.close();
   }
+}
+
+function testSearchUiRendering(): void {
+  const noop = () => undefined;
+  const closedOverlay = renderToStaticMarkup(
+    createElement(SearchOverlay, {
+      open: false,
+      query: "",
+      onOpenChange: noop,
+      onQueryChange: noop
+    })
+  );
+  assert.equal(closedOverlay, "");
+
+  const openOverlay = renderToStaticMarkup(
+    createElement(SearchOverlay, {
+      open: true,
+      query: "Apple",
+      onOpenChange: noop,
+      onQueryChange: noop
+    })
+  );
+  assert.match(openOverlay, /class="search-overlay"/);
+  assert.match(openOverlay, /aria-modal="true"/);
+  assert.match(openOverlay, /value="Apple"/);
+
+  const sidebarMarkup = renderToStaticMarkup(
+    createElement(Sidebar, {
+      datePreset: "all",
+      imageTotal: 42,
+      loading: false,
+      promptState: "all",
+      query: "Apple",
+      refreshing: false,
+      sessionId: undefined,
+      sessions: [{ sessionId: "session-a", threadName: "Design notes", count: 3 }],
+      onDatePresetChange: noop,
+      onPromptStateChange: noop,
+      onRefresh: noop,
+      onSearchOpen: noop,
+      onSessionChange: noop
+    })
+  );
+
+  const searchIndex = sidebarMarkup.indexOf(">Search<");
+  const withPromptIndex = sidebarMarkup.indexOf(">With prompt<");
+  assert.ok(searchIndex >= 0);
+  assert.ok(withPromptIndex > searchIndex);
+  assert.match(sidebarMarkup, /filter-item active search-entry/);
+  assert.equal(sidebarMarkup.includes("floating-search"), false);
 }
 
 main().catch((error) => {

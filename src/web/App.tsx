@@ -3,8 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { DatePreset, ImageRecord, ImageSearchResult, PromptState } from "../shared/types.js";
 import { fetchImages, reindexLibrary } from "./api/client.js";
 import { DetailPanel } from "./components/DetailPanel.js";
-import { FloatingSearch } from "./components/FloatingSearch.js";
 import { Gallery } from "./components/Gallery.js";
+import { SearchOverlay } from "./components/SearchOverlay.js";
 import { Sidebar } from "./components/Sidebar.js";
 
 const EMPTY_RESULT: ImageSearchResult = {
@@ -25,6 +25,7 @@ export function App() {
   const [promptState, setPromptState] = useState<PromptState>("all");
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [result, setResult] = useState<ImageSearchResult>(EMPTY_RESULT);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -113,19 +114,21 @@ export function App() {
           imageTotal={result.total}
           loading={loading}
           promptState={promptState}
+          query={query}
           refreshing={refreshing}
           sessionId={sessionId}
           sessions={result.facets.sessions}
           onDatePresetChange={setDatePreset}
           onPromptStateChange={setPromptState}
           onRefresh={handleRefresh}
+          onSearchOpen={() => setSearchOpen(true)}
           onSessionChange={setSessionId}
         />
         <Gallery images={result.items} selectedId={selectedId} loading={loading} onSelect={selectImage} />
         <DetailPanel image={selectedImage} />
       </div>
 
-      <FloatingSearch query={query} onQueryChange={setQuery} />
+      <SearchOverlay open={searchOpen} query={query} onOpenChange={setSearchOpen} onQueryChange={setQuery} />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { CalendarDays, Clock3, Image as ImageIcon, Images, MessageSquareText, RefreshCcw, Settings } from "lucide-react";
+import { CalendarDays, Clock3, Image as ImageIcon, Images, MessageSquareText, RefreshCcw, Search, Settings } from "lucide-react";
 
 import type { DatePreset, PromptState, SessionFacet } from "../../shared/types.js";
 
@@ -7,12 +7,14 @@ interface SidebarProps {
   imageTotal: number;
   loading: boolean;
   promptState: PromptState;
+  query: string;
   refreshing: boolean;
   sessionId: string | undefined;
   sessions: SessionFacet[];
   onDatePresetChange: (value: DatePreset) => void;
   onPromptStateChange: (value: PromptState) => void;
   onRefresh: () => void;
+  onSearchOpen: () => void;
   onSessionChange: (value: string | undefined) => void;
 }
 
@@ -28,12 +30,14 @@ export function Sidebar({
   imageTotal,
   loading,
   promptState,
+  query,
   refreshing,
   sessionId,
   sessions,
   onDatePresetChange,
   onPromptStateChange,
   onRefresh,
+  onSearchOpen,
   onSessionChange
 }: SidebarProps) {
   return (
@@ -64,6 +68,13 @@ export function Sidebar({
         </nav>
 
         <div className="filter-group">
+          <button
+            className={query ? "filter-item active search-entry" : "filter-item search-entry"}
+            onClick={onSearchOpen}
+          >
+            <Search size={16} />
+            <span>Search</span>
+          </button>
           <button
             className={promptState === "withPrompt" ? "filter-item active" : "filter-item"}
             onClick={() => onPromptStateChange(promptState === "withPrompt" ? "all" : "withPrompt")}
