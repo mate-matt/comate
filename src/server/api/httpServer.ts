@@ -1,0 +1,173 @@
+import fs from "node:fs";
+import path from "node:path";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { URL } from "node:url";
+
+import type { DatePreset, ImageSearchParams, PromptState } from "../../shared/types.js";
+import type { CodexPaths, ImageIndexStore } from "../domain/types.js";
+import type { LibraryService } from "../application/libraryService.js";
+import { FileLauncher, type FileLaunchAction } from "../infrastructure/fileLauncher.js";
+import { parseInteger, readJsonBody, sendError, sendJson } from "./httpUtils.js";
+import { serveStaticFile } from "./staticAssets.js";
+
+interface CreateServerOptions {
+  codexPaths: CodexPaths;
+  library: LibraryService;
+  index: ImageIndexStore;
+  launcher: FileLauncher;
+  staticDir: string | null;
+}
+
+interface OpenBody {
+  action?: FileLaunchAction;
+}
+
+export function createCodexMateServer(options: CreateServerOptions): Server {
+  return createServer((request, response) => {
+    handleRequest(options, request, response).catch((error) => {
+      const message = error instanceof Error ? error.message : "Unexpected server error.";
+      sendError(response, 500, message);
+    });
+  });
+}
+
+async function handleRequest(
+  options: CreateServerOptions,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
+  const url = new URL(request.url ?? "/", "http://127.0.0.1");
+
+  if (url.pathname.startsWith("/api")) {
+    await handleApiRequest(options, request, response, url);
+    return;
+  }
+
+  if (request.method === "GET" && options.staticDir && serveStaticFile(options.staticDir, url.pathname, response)) {
+    return;
+  }
+
+  sendError(response, 404, "Not found.");
+}
+
+async function handleApiRequest(
+  options: CreateServerOptions,
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL
+): Promise<void> {
+  if (request.method === "GET" && url.pathname === "/api/health") {
+    sendJson(response, 200, {
+      ok: true,
+      indexed: options.index.count(),
+      codexRoot: options.codexPaths.codexRoot,
+      generatedImagesDir: options.codexPaths.generatedImagesDir
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/reindex") {
+    const result = await options.library.rebuildIndex();
+    sendJson(response, 200, result);
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/images") {
+    sendJson(response, 200, options.index.search(readSearchParams(url)));
+    return;
+  }
+
+  const imageFileMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/file$/);
+  if (request.method === "GET" && imageFileMatch) {
+    await sendImageFile(options.index, decodeURIComponent(imageFileMatch[1]!), response);
+    return;
+  }
+
+  const imageOpenMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/open$/);
+  if (request.method === "POST" && imageOpenMatch) {
+    const body = await readJsonBody<OpenBody>(request);
+    const action = body.action;
+    if (action !== "openFile" && action !== "revealFile") {
+      sendError(response, 400, "Unsupported open action.");
+      return;
+    }
+
+    const record = options.index.getById(decodeURIComponent(imageOpenMatch[1]!));
+    if (!record) {
+      sendError(response, 404, "Image not found.");
+      return;
+    }
+
+    options.launcher.open(record.filePath, action);
+    sendJson(response, 200, { ok: true });
+    return;
+  }
+
+  const imageMatch = url.pathname.match(/^\/api\/images\/([^/]+)$/);
+  if (request.method === "GET" && imageMatch) {
+    const record = options.index.getById(decodeURIComponent(imageMatch[1]!));
+    if (!record) {
+      sendError(response, 404, "Image not found.");
+      return;
+    }
+
+    sendJson(response, 200, record);
+    return;
+  }
+
+  sendError(response, 404, "Not found.");
+}
+
+function readSearchParams(url: URL): ImageSearchParams {
+  const datePreset = readEnum<DatePreset>(url.searchParams.get("datePreset"), ["all", "today", "week", "month"], "all");
+  const promptState = readEnum<PromptState>(
+    url.searchParams.get("promptState"),
+    ["all", "withPrompt", "withoutPrompt"],
+    "all"
+  );
+
+  return {
+    query: url.searchParams.get("query") ?? undefined,
+    datePreset,
+    promptState,
+    sessionId: url.searchParams.get("sessionId") ?? undefined,
+    limit: parseInteger(url.searchParams.get("limit"), 80),
+    offset: parseInteger(url.searchParams.get("offset"), 0)
+  };
+}
+
+async function sendImageFile(index: ImageIndexStore, id: string, response: ServerResponse): Promise<void> {
+  const record = index.getById(id);
+  if (!record) {
+    sendError(response, 404, "Image not found.");
+    return;
+  }
+
+  if (!fs.existsSync(record.filePath)) {
+    sendError(response, 404, "Image file is missing.");
+    return;
+  }
+
+  const stat = await fs.promises.stat(record.filePath);
+  response.writeHead(200, {
+    "content-type": getImageContentType(record.filePath),
+    "content-length": stat.size,
+    "cache-control": "private, max-age=60"
+  });
+  fs.createReadStream(record.filePath).pipe(response);
+}
+
+function getImageContentType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") {
+    return "image/jpeg";
+  }
+  if (ext === ".webp") {
+    return "image/webp";
+  }
+  return "image/png";
+}
+
+function readEnum<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
+  return value && allowed.includes(value as T) ? (value as T) : fallback;
+}
