@@ -3,8 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { DatePreset, ImageRecord, ImageSearchResult, PromptState } from "../shared/types.js";
 import { fetchImages, reindexLibrary } from "./api/client.js";
 import { DetailPanel } from "./components/DetailPanel.js";
+import { FloatingSearch } from "./components/FloatingSearch.js";
 import { Gallery } from "./components/Gallery.js";
-import { Header } from "./components/Header.js";
 import { Sidebar } from "./components/Sidebar.js";
 
 const EMPTY_RESULT: ImageSearchResult = {
@@ -105,30 +105,27 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <Header
-        query={query}
-        total={result.total}
-        loading={loading}
-        refreshing={refreshing}
-        onQueryChange={setQuery}
-        onRefresh={handleRefresh}
-      />
-
       {error ? <div className="error-strip">{error}</div> : null}
 
       <div className="workspace">
         <Sidebar
           datePreset={datePreset}
+          imageTotal={result.total}
+          loading={loading}
           promptState={promptState}
+          refreshing={refreshing}
           sessionId={sessionId}
           sessions={result.facets.sessions}
           onDatePresetChange={setDatePreset}
           onPromptStateChange={setPromptState}
+          onRefresh={handleRefresh}
           onSessionChange={setSessionId}
         />
         <Gallery images={result.items} selectedId={selectedId} loading={loading} onSelect={selectImage} />
         <DetailPanel image={selectedImage} />
       </div>
+
+      <FloatingSearch query={query} onQueryChange={setQuery} />
     </div>
   );
 }

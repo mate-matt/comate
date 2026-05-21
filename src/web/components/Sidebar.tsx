@@ -1,14 +1,18 @@
-import { CalendarDays, Clock3, Image as ImageIcon, Images, MessageSquareText, Settings } from "lucide-react";
+import { CalendarDays, Clock3, Image as ImageIcon, Images, MessageSquareText, RefreshCcw, Settings } from "lucide-react";
 
 import type { DatePreset, PromptState, SessionFacet } from "../../shared/types.js";
 
 interface SidebarProps {
   datePreset: DatePreset;
+  imageTotal: number;
+  loading: boolean;
   promptState: PromptState;
+  refreshing: boolean;
   sessionId: string | undefined;
   sessions: SessionFacet[];
   onDatePresetChange: (value: DatePreset) => void;
   onPromptStateChange: (value: PromptState) => void;
+  onRefresh: () => void;
   onSessionChange: (value: string | undefined) => void;
 }
 
@@ -21,16 +25,31 @@ const DATE_FILTERS: Array<{ label: string; value: DatePreset }> = [
 
 export function Sidebar({
   datePreset,
+  imageTotal,
+  loading,
   promptState,
+  refreshing,
   sessionId,
   sessions,
   onDatePresetChange,
   onPromptStateChange,
+  onRefresh,
   onSessionChange
 }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sidebar-fixed">
+        <div className="sidebar-brand">
+          <span className="brand-mark">CM</span>
+          <button className="icon-button" onClick={onRefresh} disabled={refreshing} title="Refresh">
+            <RefreshCcw size={16} aria-hidden="true" className={refreshing ? "spin" : undefined} />
+          </button>
+          <div className="brand-copy">
+            <span className="brand-name">Codex Mate</span>
+            <span>{loading ? "Loading" : `${imageTotal} images`}</span>
+          </div>
+        </div>
+
         <nav className="filter-group" aria-label="Date filters">
           {DATE_FILTERS.map((filter) => (
             <button
