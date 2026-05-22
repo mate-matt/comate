@@ -90,7 +90,7 @@ npm run build
 This repository includes:
 
 - `CI`: runs tests and production builds on push and pull requests.
-- `Package macOS App`: manually packages unsigned macOS `.dmg` and `.zip` artifacts, and creates a draft release for `v*` tags.
+- `Package macOS App`: manually packages unsigned macOS `.dmg` and `.zip` artifacts, and publishes a GitHub Release for `v*` tags.
 
 ## macOS Gatekeeper
 

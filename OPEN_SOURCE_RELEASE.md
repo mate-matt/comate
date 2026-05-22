@@ -26,7 +26,7 @@ Codex Mate is a local companion app for the Codex desktop app, not Codex CLI. It
 The release workflow builds unsigned macOS artifacts on GitHub Actions:
 
 - manual run: creates downloadable workflow artifacts
-- `v*` tag: creates a draft GitHub Release with `.dmg` and `.zip` assets
+- `v*` tag: publishes a GitHub Release with `.dmg` and `.zip` assets
 
 The first public builds are unsigned. A signed and notarized macOS release will require Apple Developer credentials configured as GitHub repository secrets.
 
@@ -37,4 +37,4 @@ The first public builds are unsigned. A signed and notarized macOS release will 
 - [ ] Push the repository to GitHub as public.
 - [ ] Verify the first CI run passes.
 - [ ] Run the packaging workflow manually.
-- [ ] Create a `v0.1.0` tag when ready to publish the first draft release.
+- [ ] Create a `v0.1.0` tag when ready to publish the first release.

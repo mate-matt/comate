@@ -90,7 +90,7 @@ npm run build
 仓库已经配置：
 
 - `CI`：push 和 pull request 时自动运行测试和生产构建。
-- `Package macOS App`：手动触发时构建未签名的 macOS `.dmg` / `.zip`，推送 `v*` tag 时会创建 draft release。
+- `Package macOS App`：手动触发时构建未签名的 macOS `.dmg` / `.zip`，推送 `v*` tag 时会发布 GitHub Release。
 
 ## macOS Gatekeeper
 
