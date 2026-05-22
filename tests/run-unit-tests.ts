@@ -7,12 +7,18 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { LibraryService } from "../src/server/application/libraryService.js";
+import { startCodexMateRuntime } from "../src/server/application/serverRuntime.js";
+import { detectCodexDesktopData } from "../src/server/infrastructure/codexDesktopDetector.js";
 import { CodexImageScanner } from "../src/server/infrastructure/codexImageScanner.js";
 import { CodexSessionRepository } from "../src/server/infrastructure/codexSessionRepository.js";
 import { SqliteImageIndex } from "../src/server/infrastructure/sqliteImageIndex.js";
+import { findAvailablePort } from "../src/desktop/utils/port.js";
+import { waitForHttp } from "../src/desktop/utils/waitForHttp.js";
 import { DetailPanel } from "../src/web/components/DetailPanel.js";
+import { GalleryPane } from "../src/web/components/GalleryPane.js";
 import { SearchOverlay } from "../src/web/components/SearchOverlay.js";
 import { Sidebar } from "../src/web/components/Sidebar.js";
+import { StartupScreen } from "../src/web/components/StartupScreen.js";
 
 const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
@@ -20,13 +26,86 @@ async function main(): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-mate-test-"));
 
   try {
+    await testCodexDesktopDetection(root);
+    console.log("ok codex-desktop/detection");
     await testScannerSessionMergeAndIndex(root);
     console.log("ok scanner/session/index");
     testSearchUiRendering();
     console.log("ok web/search-ui");
+    testStartupScreenRendering();
+    console.log("ok web/startup-screen");
+    testGalleryViewRendering();
+    console.log("ok web/gallery-view");
+    await testEmbeddedRuntime(root);
+    console.log("ok desktop/runtime");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+}
+
+async function testCodexDesktopDetection(root: string): Promise<void> {
+  const missingRoot = path.join(root, ".missing-codex");
+  const missingStatus = await detectCodexDesktopData({
+    codexRoot: missingRoot,
+    generatedImagesDir: path.join(missingRoot, "generated_images"),
+    sessionIndexPath: path.join(missingRoot, "session_index.jsonl"),
+    sessionsDir: path.join(missingRoot, "sessions"),
+    databasePath: path.join(root, "missing.sqlite")
+  });
+
+  assert.equal(missingStatus.available, false);
+  assert.deepEqual(missingStatus.existingPaths, []);
+  assert.ok(missingStatus.missingPaths.includes("codexRoot"));
+
+  const codexRoot = path.join(root, ".codex-desktop-detection");
+  await fs.mkdir(path.join(codexRoot, "sessions"), { recursive: true });
+  const detectedStatus = await detectCodexDesktopData({
+    codexRoot,
+    generatedImagesDir: path.join(codexRoot, "generated_images"),
+    sessionIndexPath: path.join(codexRoot, "session_index.jsonl"),
+    sessionsDir: path.join(codexRoot, "sessions"),
+    databasePath: path.join(root, "detected.sqlite")
+  });
+
+  assert.equal(detectedStatus.available, true);
+  assert.deepEqual(detectedStatus.existingPaths.sort(), ["codexRoot", "sessionsDir"].sort());
+  assert.ok(detectedStatus.missingPaths.includes("generatedImagesDir"));
+}
+
+function testStartupScreenRendering(): void {
+  const noop = () => undefined;
+  const markup = renderToStaticMarkup(
+    createElement(StartupScreen, {
+      mode: "missingCodex",
+      status: {
+        codexDesktop: {
+          available: false,
+          codexRoot: "/tmp/.codex",
+          generatedImagesDir: "/tmp/.codex/generated_images",
+          sessionIndexPath: "/tmp/.codex/session_index.jsonl",
+          sessionsDir: "/tmp/.codex/sessions",
+          existingPaths: [],
+          missingPaths: ["codexRoot", "generatedImagesDir", "sessionIndexPath", "sessionsDir"]
+        },
+        indexing: {
+          state: "ready",
+          indexed: 0,
+          scannedAt: new Date().toISOString(),
+          durationMs: 0,
+          error: null
+        },
+        localOnly: true,
+        targetApp: "Codex Desktop"
+      },
+      error: null,
+      onRetry: noop
+    })
+  );
+
+  assert.match(markup, /Codex Desktop data was not found/);
+  assert.match(markup, /Codex desktop app/);
+  assert.match(markup, /Completely local/);
+  assert.match(markup, />Retry</);
 }
 
 async function testScannerSessionMergeAndIndex(root: string): Promise<void> {
@@ -193,6 +272,99 @@ function testSearchUiRendering(): void {
   const titleIndex = detailMarkup.indexOf(">Title<");
   assert.ok(promptIndex >= 0);
   assert.ok(titleIndex > promptIndex);
+}
+
+function testGalleryViewRendering(): void {
+  const noop = () => undefined;
+  const image = {
+    id: "image-a",
+    filePath: "/tmp/image-a.png",
+    fileName: "ig_image_a.png",
+    sessionId: "session-a",
+    threadName: "制作 Apple 3D 海报",
+    generatedAt: "2026-05-21T11:46:07.558Z",
+    fileModifiedAt: "2026-05-21T11:46:07.558Z",
+    prompt: "Create a clean Apple poster with glass detail.",
+    width: 1,
+    height: 1,
+    sizeBytes: 68,
+    callId: "ig_image_a",
+    sessionPath: "/tmp/session.jsonl",
+    hasPrompt: true
+  };
+
+  const detailedMarkup = renderToStaticMarkup(
+    createElement(GalleryPane, {
+      images: [image],
+      loading: false,
+      metaVisible: true,
+      selectedId: image.id,
+      onMetaVisibleChange: noop,
+      onSelect: noop
+    })
+  );
+  assert.match(detailedMarkup, /title="Hide details"/);
+  assert.match(detailedMarkup, /class="tile-meta"/);
+
+  const cleanMarkup = renderToStaticMarkup(
+    createElement(GalleryPane, {
+      images: [image],
+      loading: false,
+      metaVisible: false,
+      selectedId: image.id,
+      onMetaVisibleChange: noop,
+      onSelect: noop
+    })
+  );
+  assert.match(cleanMarkup, /title="Show details"/);
+  assert.match(cleanMarkup, /gallery gallery-clean/);
+  assert.equal(cleanMarkup.includes('class="tile-meta"'), false);
+}
+
+async function testEmbeddedRuntime(root: string): Promise<void> {
+  const codexRoot = path.join(root, ".codex-empty");
+  const appDataDir = path.join(root, ".codex-mate-empty");
+  const port = await findAvailablePort(48_880);
+  const runtime = await startCodexMateRuntime({
+    codexPaths: {
+      codexRoot,
+      generatedImagesDir: path.join(codexRoot, "generated_images"),
+      sessionIndexPath: path.join(codexRoot, "session_index.jsonl"),
+      sessionsDir: path.join(codexRoot, "sessions"),
+      databasePath: path.join(appDataDir, "codex-mate.sqlite")
+    },
+    port,
+    staticDir: null
+  });
+
+  try {
+    await waitForHttp(`${runtime.url}/api/health`, { timeoutMs: 2_000, intervalMs: 50 });
+    const initialIndex = await runtime.initialIndex;
+    assert.equal(initialIndex.indexed, 0);
+
+    const response = await fetch(`${runtime.url}/api/health`);
+    const health = (await response.json()) as { indexed: number; indexingState: string; localOnly: boolean; targetApp: string };
+    assert.equal(health.indexed, 0);
+    assert.equal(health.indexingState, "ready");
+    assert.equal(health.localOnly, true);
+    assert.equal(health.targetApp, "Codex Desktop");
+
+    const statusResponse = await fetch(`${runtime.url}/api/status`);
+    const status = (await statusResponse.json()) as {
+      codexDesktop: { available: boolean; missingPaths: string[] };
+      indexing: { state: string; indexed: number };
+      localOnly: boolean;
+      targetApp: string;
+    };
+    assert.equal(status.codexDesktop.available, false);
+    assert.ok(status.codexDesktop.missingPaths.includes("codexRoot"));
+    assert.equal(status.indexing.state, "ready");
+    assert.equal(status.indexing.indexed, 0);
+    assert.equal(status.localOnly, true);
+    assert.equal(status.targetApp, "Codex Desktop");
+  } finally {
+    await runtime.close();
+  }
 }
 
 main().catch((error) => {

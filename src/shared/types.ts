@@ -50,6 +50,35 @@ export interface ReindexResult {
   durationMs: number;
 }
 
+export type CodexDesktopDataPath = "codexRoot" | "generatedImagesDir" | "sessionIndexPath" | "sessionsDir";
+
+export interface CodexDesktopStatus {
+  available: boolean;
+  codexRoot: string;
+  generatedImagesDir: string;
+  sessionIndexPath: string;
+  sessionsDir: string;
+  existingPaths: CodexDesktopDataPath[];
+  missingPaths: CodexDesktopDataPath[];
+}
+
+export type IndexingState = "idle" | "indexing" | "ready" | "error";
+
+export interface IndexingStatus {
+  state: IndexingState;
+  indexed: number;
+  scannedAt: string | null;
+  durationMs: number | null;
+  error: string | null;
+}
+
+export interface RuntimeStatus {
+  codexDesktop: CodexDesktopStatus;
+  indexing: IndexingStatus;
+  localOnly: true;
+  targetApp: "Codex Desktop";
+}
+
 export interface ApiErrorResponse {
   error: string;
 }

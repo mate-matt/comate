@@ -1,6 +1,8 @@
 # Codex Mate
 
-Codex Mate is a local imagegen library for Codex. It scans Codex-generated images, links them back to session metadata and prompts, and serves a clean local Web UI.
+Codex Mate is a local companion app for the Codex desktop app. It scans Codex Desktop-generated images on your machine, links them back to session metadata and prompts, and serves a clean private gallery.
+
+Codex Mate runs completely locally. It reads local Codex Desktop data and does not need a network connection for your library.
 
 ## Commands
 
@@ -15,6 +17,14 @@ Production mode:
 ```bash
 npm run build
 npm start
+```
+
+Desktop app:
+
+```bash
+npm run desktop
+npm run package:mac
+open "release/mac-arm64/Codex Mate.app"
 ```
 
 Default URLs:

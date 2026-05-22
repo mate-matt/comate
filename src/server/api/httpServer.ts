@@ -5,15 +5,15 @@ import { URL } from "node:url";
 
 import type { DatePreset, ImageSearchParams, PromptState } from "../../shared/types.js";
 import type { CodexPaths, ImageIndexStore } from "../domain/types.js";
-import type { LibraryService } from "../application/libraryService.js";
+import type { IndexingService } from "../application/indexingService.js";
 import { FileLauncher, type FileLaunchAction } from "../infrastructure/fileLauncher.js";
 import { parseInteger, readJsonBody, sendError, sendJson } from "./httpUtils.js";
 import { serveStaticFile } from "./staticAssets.js";
 
 interface CreateServerOptions {
   codexPaths: CodexPaths;
-  library: LibraryService;
   index: ImageIndexStore;
+  indexing: IndexingService;
   launcher: FileLauncher;
   staticDir: string | null;
 }
@@ -57,17 +57,26 @@ async function handleApiRequest(
   url: URL
 ): Promise<void> {
   if (request.method === "GET" && url.pathname === "/api/health") {
+    const status = await options.indexing.getStatus();
     sendJson(response, 200, {
       ok: true,
       indexed: options.index.count(),
       codexRoot: options.codexPaths.codexRoot,
-      generatedImagesDir: options.codexPaths.generatedImagesDir
+      generatedImagesDir: options.codexPaths.generatedImagesDir,
+      indexingState: status.indexing.state,
+      targetApp: status.targetApp,
+      localOnly: status.localOnly
     });
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/status") {
+    sendJson(response, 200, await options.indexing.getStatus());
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/reindex") {
-    const result = await options.library.rebuildIndex();
+    const result = await options.indexing.reindex();
     sendJson(response, 200, result);
     return;
   }

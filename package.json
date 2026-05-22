@@ -3,29 +3,52 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "dist-desktop/desktop/main.js",
   "scripts": {
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "CODEX_MATE_DEV_API=1 NODE_OPTIONS=--no-warnings tsx watch src/server/index.ts",
     "dev:web": "vite --host 127.0.0.1 --port 4388",
-    "build": "npm run build:web && npm run build:server",
+    "build": "npm run build:web && npm run build:server && npm run build:desktop",
     "build:web": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
+    "build:desktop": "tsc -p tsconfig.desktop.json",
+    "desktop": "npm run build && electron .",
+    "package:mac": "npm run build && electron-builder --mac dir",
     "start": "NODE_OPTIONS=--no-warnings node dist-server/server/index.js",
     "test": "NODE_OPTIONS=--no-warnings tsx tests/run-unit-tests.ts"
   },
-  "dependencies": {
+  "build": {
+    "appId": "com.codexmate.app",
+    "productName": "Codex Mate",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist-desktop/**/*",
+      "dist-web/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dir"
+      ]
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.2",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
     "concurrently": "^9.2.1",
+    "electron": "^42.2.0",
+    "electron-builder": "^26.8.1",
     "lucide-react": "^0.561.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vite": "^7.2.7"
-  },
-  "devDependencies": {
-    "@types/node": "^24.10.2",
-    "@types/react": "^19.2.7",
-    "@types/react-dom": "^19.2.3"
   }
 }

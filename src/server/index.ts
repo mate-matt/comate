@@ -1,45 +1,36 @@
 import path from "node:path";
 import process from "node:process";
 
-import { LibraryService } from "./application/libraryService.js";
-import { DEFAULT_API_PORT, DEFAULT_WEB_PORT, resolveCodexPaths } from "./config/paths.js";
-import { createCodexMateServer } from "./api/httpServer.js";
-import { CodexImageScanner } from "./infrastructure/codexImageScanner.js";
-import { CodexSessionRepository } from "./infrastructure/codexSessionRepository.js";
-import { FileLauncher } from "./infrastructure/fileLauncher.js";
-import { SqliteImageIndex } from "./infrastructure/sqliteImageIndex.js";
+import { startCodexMateRuntime } from "./application/serverRuntime.js";
+import { DEFAULT_API_PORT, DEFAULT_WEB_PORT } from "./config/paths.js";
 
 async function main(): Promise<void> {
-  const codexPaths = resolveCodexPaths();
-  const index = await SqliteImageIndex.open(codexPaths.databasePath);
-  const library = new LibraryService(
-    new CodexImageScanner(codexPaths.generatedImagesDir),
-    new CodexSessionRepository(codexPaths.sessionIndexPath, codexPaths.sessionsDir),
-    index
-  );
-
-  const initial = await library.rebuildIndex();
   const isDevApi = process.env.CODEX_MATE_DEV_API === "1";
   const port = isDevApi ? DEFAULT_API_PORT : DEFAULT_WEB_PORT;
   const staticDir = isDevApi ? null : path.resolve(process.cwd(), "dist-web");
-  const server = createCodexMateServer({
-    codexPaths,
-    library,
-    index,
-    launcher: new FileLauncher(),
+
+  const runtime = await startCodexMateRuntime({
+    port,
     staticDir
   });
 
-  server.listen(port, "127.0.0.1", () => {
-    console.log(`Codex Mate indexed ${initial.indexed} image(s) in ${initial.durationMs}ms.`);
-    console.log(`Codex Mate listening at http://127.0.0.1:${port}`);
-  });
+  console.log(`Codex Mate listening at ${runtime.url}`);
+  runtime.initialIndex
+    .then((result) => {
+      console.log(`Codex Mate indexed ${result.indexed} image(s) in ${result.durationMs}ms.`);
+    })
+    .catch((error) => {
+      console.error(error);
+    });
 
   const shutdown = (): void => {
-    server.close(() => {
-      index.close();
-      process.exit(0);
-    });
+    runtime
+      .close()
+      .then(() => process.exit(0))
+      .catch((error) => {
+        console.error(error);
+        process.exit(1);
+      });
   };
 
   process.on("SIGINT", shutdown);

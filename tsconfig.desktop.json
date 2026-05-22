@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "rootDir": "src",
+    "outDir": "dist-desktop",
+    "declaration": false,
+    "sourceMap": true,
+    "types": ["node", "electron"]
+  },
+  "include": ["src/desktop", "src/server", "src/shared"]
+}

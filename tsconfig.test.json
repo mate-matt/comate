@@ -1,4 +1,4 @@
 {
   "extends": "./tsconfig.server.json",
-  "include": ["src/server", "src/shared", "tests"]
+  "include": ["src/desktop", "src/server", "src/shared", "src/web", "tests"]
 }

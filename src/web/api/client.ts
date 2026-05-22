@@ -1,4 +1,9 @@
-import type { ImageRecord, ImageSearchParams, ImageSearchResult, ReindexResult } from "../../shared/types.js";
+import type { ImageRecord, ImageSearchParams, ImageSearchResult, ReindexResult, RuntimeStatus } from "../../shared/types.js";
+
+export async function fetchRuntimeStatus(signal?: AbortSignal): Promise<RuntimeStatus> {
+  const response = await fetch("/api/status", { signal });
+  return readJson<RuntimeStatus>(response);
+}
 
 export async function fetchImages(params: ImageSearchParams, signal?: AbortSignal): Promise<ImageSearchResult> {
   const query = new URLSearchParams();
