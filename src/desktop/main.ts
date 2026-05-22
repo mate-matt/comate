@@ -41,6 +41,7 @@ if (!app.requestSingleInstanceLock()) {
 
     event.preventDefault();
     closingRuntime = true;
+    BrowserWindow.getAllWindows().forEach((window) => window.destroy());
     runtime
       .close()
       .catch((error) => {
@@ -48,7 +49,7 @@ if (!app.requestSingleInstanceLock()) {
       })
       .finally(() => {
         runtime = null;
-        app.quit();
+        app.exit(0);
       });
   });
 

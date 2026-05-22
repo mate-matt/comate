@@ -82,9 +82,25 @@ function listen(server: Server, port: number, host: string): Promise<void> {
 
 function closeRuntime(server: Server, index: { close: () => void }): Promise<void> {
   return new Promise((resolve, reject) => {
-    server.close((error) => {
+    let finished = false;
+    let indexClosed = false;
+    const forceCloseTimer = setTimeout(() => {
+      closeOpenHttpConnections(server);
+    }, 1_000);
+
+    const finish = (error?: Error): void => {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+      clearTimeout(forceCloseTimer);
+
       try {
-        index.close();
+        if (!indexClosed) {
+          index.close();
+          indexClosed = true;
+        }
       } catch (closeError) {
         reject(closeError);
         return;
@@ -95,6 +111,22 @@ function closeRuntime(server: Server, index: { close: () => void }): Promise<voi
       } else {
         resolve();
       }
+    };
+
+    server.close((error) => {
+      finish(error ?? undefined);
     });
+
+    closeIdleHttpConnections(server);
   });
+}
+
+function closeIdleHttpConnections(server: Server): void {
+  const maybeClosable = server as Server & { closeIdleConnections?: () => void };
+  maybeClosable.closeIdleConnections?.();
+}
+
+function closeOpenHttpConnections(server: Server): void {
+  const maybeClosable = server as Server & { closeAllConnections?: () => void };
+  maybeClosable.closeAllConnections?.();
 }
