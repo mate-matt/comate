@@ -9,6 +9,8 @@ import type { CodexMateRuntime } from "../server/application/serverRuntime.js";
 
 const { app, BrowserWindow, dialog } = electron;
 
+app.commandLine.appendSwitch("password-store", "basic");
+
 let mainWindow: BrowserWindowType | null = null;
 let runtime: CodexMateRuntime | null = null;
 let closingRuntime = false;

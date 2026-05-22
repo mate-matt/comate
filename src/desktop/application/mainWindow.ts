@@ -15,6 +15,7 @@ export function createMainWindow(url: string): BrowserWindowType {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      partition: "codex-mate-memory",
       sandbox: true
     },
     width: 1280

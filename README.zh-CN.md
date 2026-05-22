@@ -2,6 +2,10 @@
 
 [English](./README.md)
 
+<p align="center">
+  <img src="./docs/images/codex-mate-icon.png" alt="Codex Mate 图标" width="96" height="96">
+</p>
+
 Codex Mate 是一个给 Codex 桌面应用使用的本地图像图库。它会索引 Codex Desktop 生成在你电脑上的图片，把图片和本地 session 元数据、prompt 关联起来，然后提供一个干净、私密的本地浏览界面。
 
 ![Codex Mate 截图](./docs/images/codex-mate-screenshot.png)
