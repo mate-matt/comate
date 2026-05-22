@@ -18,8 +18,9 @@ html,
 body,
 #root {
   min-width: 0;
-  min-height: 100%;
+  height: 100%;
   margin: 0;
+  overflow: hidden;
 }
 
 button,
@@ -37,7 +38,8 @@ button:disabled {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(246, 246, 243, 0.86) 44%),
     #f6f6f3;
@@ -104,14 +106,16 @@ button:disabled {
   display: grid;
   grid-template-columns: 228px minmax(0, 1fr) 392px;
   gap: 0;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar {
-  position: sticky;
-  top: 0;
+  min-height: 0;
   height: 100vh;
   overflow: hidden;
+  overscroll-behavior: contain;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   padding: 16px 12px 12px 18px;
@@ -125,8 +129,8 @@ button:disabled {
 
 .sidebar-brand {
   display: grid;
-  grid-template-columns: 34px 36px minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: 34px minmax(0, 1fr) 36px;
+  gap: 10px;
   align-items: center;
   margin-bottom: 26px;
 }
@@ -235,7 +239,7 @@ button:disabled {
 
 .sidebar-tools {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 1fr;
   gap: 6px;
   padding: 10px 0 0;
   border-top: 1px solid #e2e2dc;
@@ -262,13 +266,30 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 14px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 18px;
+  scrollbar-width: thin;
+  scrollbar-color: #c8c8c0 transparent;
+}
+
+.gallery::-webkit-scrollbar {
+  width: 8px;
+}
+
+.gallery::-webkit-scrollbar-thumb {
+  background: #c8c8c0;
+  border-radius: 999px;
 }
 
 .gallery-state {
   display: grid;
   place-items: center;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   color: #7b7d77;
   font-size: 14px;
 }
@@ -346,10 +367,10 @@ button:disabled {
 }
 
 .detail-panel {
-  position: sticky;
-  top: 0;
+  min-height: 0;
   height: 100vh;
-  overflow: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -461,6 +482,7 @@ button:disabled {
   min-height: 180px;
   max-height: 34vh;
   overflow: auto;
+  overscroll-behavior: contain;
   margin: 0;
   padding: 12px;
   border: 1px solid #e0e0da;
@@ -664,8 +686,23 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
+  html,
+  body,
+  #root {
+    overflow: auto;
+  }
+
+  .app-shell {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
   .workspace {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
 
   .sidebar {
@@ -674,6 +711,7 @@ button:disabled {
     display: grid;
     grid-template-columns: 1fr;
     padding: 12px 18px;
+    overflow: visible;
     border-right: 0;
     border-bottom: 1px solid #deded8;
   }
@@ -688,6 +726,7 @@ button:disabled {
 
   .gallery {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    overflow: visible;
     padding: 12px;
   }
 

@@ -10,6 +10,7 @@ import { LibraryService } from "../src/server/application/libraryService.js";
 import { CodexImageScanner } from "../src/server/infrastructure/codexImageScanner.js";
 import { CodexSessionRepository } from "../src/server/infrastructure/codexSessionRepository.js";
 import { SqliteImageIndex } from "../src/server/infrastructure/sqliteImageIndex.js";
+import { DetailPanel } from "../src/web/components/DetailPanel.js";
 import { SearchOverlay } from "../src/web/components/SearchOverlay.js";
 import { Sidebar } from "../src/web/components/Sidebar.js";
 
@@ -185,6 +186,13 @@ function testSearchUiRendering(): void {
   assert.ok(withPromptIndex > searchIndex);
   assert.match(sidebarMarkup, /filter-item active search-entry/);
   assert.equal(sidebarMarkup.includes("floating-search"), false);
+  assert.equal(sidebarMarkup.includes("Settings"), false);
+
+  const detailMarkup = renderToStaticMarkup(createElement(DetailPanel, { image }));
+  const promptIndex = detailMarkup.indexOf(">Prompt<");
+  const titleIndex = detailMarkup.indexOf(">Title<");
+  assert.ok(promptIndex >= 0);
+  assert.ok(titleIndex > promptIndex);
 }
 
 main().catch((error) => {

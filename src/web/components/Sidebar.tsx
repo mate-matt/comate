@@ -1,4 +1,4 @@
-import { CalendarDays, Clock3, Image as ImageIcon, Images, MessageSquareText, RefreshCcw, Search, Settings } from "lucide-react";
+import { CalendarDays, Clock3, Image as ImageIcon, Images, MessageSquareText, RefreshCcw, Search } from "lucide-react";
 
 import type { DatePreset, PromptState, SessionFacet } from "../../shared/types.js";
 
@@ -45,13 +45,13 @@ export function Sidebar({
       <div className="sidebar-fixed">
         <div className="sidebar-brand">
           <span className="brand-mark">CM</span>
-          <button className="icon-button" onClick={onRefresh} disabled={refreshing} title="Refresh">
-            <RefreshCcw size={16} aria-hidden="true" className={refreshing ? "spin" : undefined} />
-          </button>
           <div className="brand-copy">
             <span className="brand-name">Codex Mate</span>
             <span>{loading ? "Loading" : `${imageTotal} images`}</span>
           </div>
+          <button className="icon-button" onClick={onRefresh} disabled={refreshing} title="Refresh">
+            <RefreshCcw size={16} aria-hidden="true" className={refreshing ? "spin" : undefined} />
+          </button>
         </div>
 
         <nav className="filter-group" aria-label="Date filters">
@@ -113,9 +113,6 @@ export function Sidebar({
       <div className="sidebar-tools" role="tablist" aria-label="Tools">
         <button className="tool-tab active" type="button" title="Library" aria-selected="true">
           <Images size={16} />
-        </button>
-        <button className="tool-tab" type="button" title="Settings" aria-selected="false" disabled>
-          <Settings size={16} />
         </button>
       </div>
     </aside>

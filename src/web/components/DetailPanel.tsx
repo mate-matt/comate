@@ -40,14 +40,6 @@ export function DetailPanel({ image }: DetailPanelProps) {
         </button>
       </div>
 
-      <dl className="meta-list">
-        <Meta label="Title" value={image.threadName ?? "Untitled"} />
-        <Meta label="Date" value={formatFullDate(image.generatedAt ?? image.fileModifiedAt)} />
-        <Meta label="File" value={middleEllipsis(image.fileName, 42)} title={image.fileName} />
-        <Meta label="Size" value={`${dimensions} · ${formatBytes(image.sizeBytes)}`} />
-        <Meta label="Session" value={middleEllipsis(image.sessionId, 24)} title={image.sessionId} />
-      </dl>
-
       <div className="prompt-block">
         <div className="prompt-toolbar">
           <span>Prompt</span>
@@ -57,6 +49,14 @@ export function DetailPanel({ image }: DetailPanelProps) {
         </div>
         <pre>{image.prompt ?? "No prompt"}</pre>
       </div>
+
+      <dl className="meta-list">
+        <Meta label="Title" value={image.threadName ?? "Untitled"} />
+        <Meta label="Date" value={formatFullDate(image.generatedAt ?? image.fileModifiedAt)} />
+        <Meta label="File" value={middleEllipsis(image.fileName, 42)} title={image.fileName} />
+        <Meta label="Size" value={`${dimensions} · ${formatBytes(image.sizeBytes)}`} />
+        <Meta label="Session" value={middleEllipsis(image.sessionId, 24)} title={image.sessionId} />
+      </dl>
     </aside>
   );
 }
