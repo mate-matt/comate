@@ -110,27 +110,56 @@ async function testScannerSessionMergeAndIndex(root: string): Promise<void> {
 
 function testSearchUiRendering(): void {
   const noop = () => undefined;
+  const image = {
+    id: "image-a",
+    filePath: "/tmp/image-a.png",
+    fileName: "ig_image_a.png",
+    sessionId: "session-a",
+    threadName: "制作 Apple 3D 海报",
+    generatedAt: "2026-05-21T11:46:07.558Z",
+    fileModifiedAt: "2026-05-21T11:46:07.558Z",
+    prompt: "Create a clean Apple poster with glass detail.",
+    width: 1,
+    height: 1,
+    sizeBytes: 68,
+    callId: "ig_image_a",
+    sessionPath: "/tmp/session.jsonl",
+    hasPrompt: true
+  };
   const closedOverlay = renderToStaticMarkup(
     createElement(SearchOverlay, {
+      images: [],
+      loading: false,
       open: false,
       query: "",
+      selectedId: null,
+      total: 0,
       onOpenChange: noop,
-      onQueryChange: noop
+      onQueryChange: noop,
+      onSelectImage: noop
     })
   );
   assert.equal(closedOverlay, "");
 
   const openOverlay = renderToStaticMarkup(
     createElement(SearchOverlay, {
+      images: [image],
+      loading: false,
       open: true,
       query: "Apple",
+      selectedId: image.id,
+      total: 1,
       onOpenChange: noop,
-      onQueryChange: noop
+      onQueryChange: noop,
+      onSelectImage: noop
     })
   );
   assert.match(openOverlay, /class="search-overlay"/);
   assert.match(openOverlay, /aria-modal="true"/);
   assert.match(openOverlay, /value="Apple"/);
+  assert.match(openOverlay, /class="search-result-item"/);
+  assert.match(openOverlay, /制作 Apple 3D 海报/);
+  assert.match(openOverlay, />title</);
 
   const sidebarMarkup = renderToStaticMarkup(
     createElement(Sidebar, {

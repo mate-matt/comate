@@ -128,7 +128,17 @@ export function App() {
         <DetailPanel image={selectedImage} />
       </div>
 
-      <SearchOverlay open={searchOpen} query={query} onOpenChange={setSearchOpen} onQueryChange={setQuery} />
+      <SearchOverlay
+        images={result.items}
+        loading={loading}
+        open={searchOpen}
+        query={query}
+        selectedId={selectedId}
+        total={result.total}
+        onOpenChange={setSearchOpen}
+        onQueryChange={setQuery}
+        onSelectImage={selectImage}
+      />
     </div>
   );
 }
