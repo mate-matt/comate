@@ -752,6 +752,8 @@ function testCapabilityViewRendering(): void {
   assert.match(workspaceMarkup, /imagegen/);
   assert.match(workspaceMarkup, /Browser/);
   assert.match(workspaceMarkup, /status-warning/);
+  assert.match(workspaceMarkup, /issues need attention/);
+  assert.equal(workspaceMarkup.includes("capability-stats"), false);
 
   const inspectorMarkup = renderToStaticMarkup(
     createElement(CapabilityInspector, {
@@ -761,9 +763,14 @@ function testCapabilityViewRendering(): void {
     })
   );
   assert.match(inspectorMarkup, /capability-inspector/);
-  assert.match(inspectorMarkup, /打开文件/);
-  assert.match(inspectorMarkup, /Dependencies/);
-  assert.match(inspectorMarkup, /Issues/);
+  assert.match(inspectorMarkup, /需要注意/);
+  assert.match(inspectorMarkup, /Description 偏长/);
+  assert.match(inspectorMarkup, /使用方式/);
+  assert.match(inspectorMarkup, /资源/);
+  assert.match(inspectorMarkup, /位置/);
+  assert.match(inspectorMarkup, />打开</);
+  assert.equal(inspectorMarkup.includes(">Details<"), false);
+  assert.equal(inspectorMarkup.includes(">Trigger<"), false);
 }
 
 function createCapabilityGraph(): CapabilityScanResult {

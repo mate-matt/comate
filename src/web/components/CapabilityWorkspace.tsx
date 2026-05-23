@@ -1,7 +1,13 @@
 import { AlertTriangle, Search } from "lucide-react";
 
 import type { CapabilityRecord, CapabilityScanResult } from "../../shared/types.js";
-import { filterCapabilities, getCapabilityStatCards, groupCapabilities } from "../domain/capabilityView.js";
+import {
+  filterCapabilities,
+  getCapabilityKindName,
+  getCapabilitySummaryText,
+  getIssueSummary,
+  groupCapabilities
+} from "../domain/capabilityView.js";
 import { getCapabilitySectionLabel, type CapabilitySection } from "../domain/navigation.js";
 
 interface CapabilityWorkspaceProps {
@@ -27,7 +33,7 @@ export function CapabilityWorkspace({
 }: CapabilityWorkspaceProps) {
   const visibleItems = filterCapabilities(capabilities, section, query);
   const groups = groupCapabilities(visibleItems);
-  const statCards = getCapabilityStatCards(capabilities?.summary ?? null);
+  const issueSummary = getIssueSummary(capabilities?.summary ?? null);
 
   return (
     <section className="capability-workspace" aria-label="Codex capability map">
@@ -47,14 +53,13 @@ export function CapabilityWorkspace({
         </label>
       </div>
 
-      <div className="capability-stats" aria-label="Capability summary">
-        {statCards.map((card) => (
-          <div key={card.label} className={card.label === "Issues" && card.value > 0 ? "capability-stat warning" : "capability-stat"}>
-            <strong>{card.value}</strong>
-            <span>{card.label}</span>
-          </div>
-        ))}
-      </div>
+      {issueSummary ? (
+        <div className="capability-issue-summary">
+          <AlertTriangle size={15} aria-hidden="true" />
+          <span>{issueSummary}</span>
+          <small>Open Issues in the sidebar to review only affected entries.</small>
+        </div>
+      ) : null}
 
       {error ? (
         <div className="capability-state error">
@@ -82,6 +87,7 @@ export function CapabilityWorkspace({
                   key={capability.id}
                   capability={capability}
                   selected={capability.id === selectedId}
+                  showKind={section === "overview" || section === "issues"}
                   onSelect={onSelect}
                 />
               ))}
@@ -96,10 +102,12 @@ export function CapabilityWorkspace({
 function CapabilityRow({
   capability,
   selected,
+  showKind,
   onSelect
 }: {
   capability: CapabilityRecord;
   selected: boolean;
+  showKind: boolean;
   onSelect: (capability: CapabilityRecord) => void;
 }) {
   return (
@@ -108,13 +116,16 @@ function CapabilityRow({
       type="button"
       onClick={() => onSelect(capability)}
     >
-      <span className={`capability-kind kind-${capability.kind}`}>{capability.kind}</span>
       <span className="capability-row-main">
         <strong>{capability.name}</strong>
-        <small>{capability.description ?? capability.origin}</small>
+        <small>{getCapabilitySummaryText(capability)}</small>
       </span>
-      <span className={`capability-status status-${capability.status}`}>{capability.status}</span>
-      {capability.issues.length > 0 ? <em>{capability.issues.length}</em> : null}
+      <span className="capability-row-tags">
+        <span className="capability-source">{capability.source}</span>
+        <span className={`capability-status status-${capability.status}`}>{capability.status}</span>
+        {capability.issues.length > 0 ? <em>{capability.issues.length}</em> : null}
+        {showKind ? <span className={`capability-kind kind-${capability.kind}`}>{getCapabilityKindName(capability.kind)}</span> : null}
+      </span>
     </button>
   );
 }
