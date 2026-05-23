@@ -5,10 +5,15 @@ import { imageFileUrl, openImage } from "../api/client.js";
 import { formatBytes, formatFullDate, middleEllipsis } from "../utils/format.js";
 
 interface DetailPanelProps {
+  collapsed?: boolean;
   image: ImageRecord | null;
 }
 
-export function DetailPanel({ image }: DetailPanelProps) {
+export function DetailPanel({ collapsed = false, image }: DetailPanelProps) {
+  if (collapsed) {
+    return <aside className="detail-panel collapsed" aria-hidden="true" />;
+  }
+
   if (!image) {
     return (
       <aside className="detail-panel empty">
@@ -40,23 +45,33 @@ export function DetailPanel({ image }: DetailPanelProps) {
         </button>
       </div>
 
-      <div className="prompt-block">
-        <div className="prompt-toolbar">
+      <section className="detail-section prompt-section">
+        <div className="detail-section-heading">
           <span>Prompt</span>
-          <button disabled={!image.prompt} onClick={() => image.prompt && navigator.clipboard.writeText(image.prompt)}>
-            <Copy size={15} />
+          <button
+            className="detail-copy-button"
+            disabled={!image.prompt}
+            aria-label="Copy prompt"
+            onClick={() => image.prompt && navigator.clipboard.writeText(image.prompt)}
+          >
+            <Copy size={14} />
           </button>
         </div>
         <pre>{image.prompt ?? "No prompt"}</pre>
-      </div>
+      </section>
 
-      <dl className="meta-list">
-        <Meta label="Title" value={image.threadName ?? "Untitled"} />
-        <Meta label="Date" value={formatFullDate(image.generatedAt ?? image.fileModifiedAt)} />
-        <Meta label="File" value={middleEllipsis(image.fileName, 42)} title={image.fileName} />
-        <Meta label="Size" value={`${dimensions} · ${formatBytes(image.sizeBytes)}`} />
-        <Meta label="Session" value={middleEllipsis(image.sessionId, 24)} title={image.sessionId} />
-      </dl>
+      <section className="detail-section metadata-section">
+        <div className="detail-section-heading">
+          <span>Details</span>
+        </div>
+        <dl className="meta-list">
+          <Meta label="Title" value={image.threadName ?? "Untitled"} />
+          <Meta label="Date" value={formatFullDate(image.generatedAt ?? image.fileModifiedAt)} />
+          <Meta label="File" value={middleEllipsis(image.fileName, 42)} title={image.fileName} />
+          <Meta label="Size" value={`${dimensions} · ${formatBytes(image.sizeBytes)}`} />
+          <Meta label="Session" value={middleEllipsis(image.sessionId, 24)} title={image.sessionId} />
+        </dl>
+      </section>
     </aside>
   );
 }

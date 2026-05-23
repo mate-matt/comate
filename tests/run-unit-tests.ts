@@ -19,6 +19,12 @@ import { GalleryPane } from "../src/web/components/GalleryPane.js";
 import { SearchOverlay } from "../src/web/components/SearchOverlay.js";
 import { Sidebar } from "../src/web/components/Sidebar.js";
 import { StartupScreen } from "../src/web/components/StartupScreen.js";
+import { WorkspaceBar } from "../src/web/components/WorkspaceBar.js";
+import {
+  getImageWorkspaceHeader,
+  getWorkspaceClassName,
+  togglePanelState
+} from "../src/web/domain/workspaceLayout.js";
 
 const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
@@ -32,6 +38,10 @@ async function main(): Promise<void> {
     console.log("ok scanner/session/index");
     testSearchUiRendering();
     console.log("ok web/search-ui");
+    testWorkspaceLayoutModel();
+    console.log("ok web/workspace-layout");
+    testWorkspaceBarRendering();
+    console.log("ok web/workspace-bar");
     testStartupScreenRendering();
     console.log("ok web/startup-screen");
     testGalleryViewRendering();
@@ -243,35 +253,169 @@ function testSearchUiRendering(): void {
 
   const sidebarMarkup = renderToStaticMarkup(
     createElement(Sidebar, {
+      collapsed: false,
       datePreset: "all",
       imageTotal: 42,
       loading: false,
       promptState: "all",
-      query: "Apple",
-      refreshing: false,
       sessionId: undefined,
       sessions: [{ sessionId: "session-a", threadName: "Design notes", count: 3 }],
       onDatePresetChange: noop,
       onPromptStateChange: noop,
-      onRefresh: noop,
-      onSearchOpen: noop,
       onSessionChange: noop
     })
   );
 
-  const searchIndex = sidebarMarkup.indexOf(">Search<");
   const withPromptIndex = sidebarMarkup.indexOf(">With prompt<");
-  assert.ok(searchIndex >= 0);
-  assert.ok(withPromptIndex > searchIndex);
-  assert.match(sidebarMarkup, /filter-item active search-entry/);
+  const sessionsIndex = sidebarMarkup.indexOf(">Sessions<");
+  assert.ok(withPromptIndex >= 0);
+  assert.ok(sessionsIndex > withPromptIndex);
+  assert.match(sidebarMarkup, /class="session-section"/);
+  assert.match(sidebarMarkup, /aria-expanded="true"/);
+  assert.equal(sidebarMarkup.includes(">All sessions<"), false);
+  assert.equal(sidebarMarkup.includes(">Search<"), false);
+  assert.equal(sidebarMarkup.includes("search-entry"), false);
+  assert.match(sidebarMarkup, /brand-mark/);
+  assert.match(sidebarMarkup, /comate-icon\.svg/);
+  assert.equal(sidebarMarkup.includes(">CM<"), false);
+  assert.equal(sidebarMarkup.includes("Local"), false);
+  assert.equal(sidebarMarkup.includes("Sync"), false);
+  assert.equal(sidebarMarkup.includes("42 images"), false);
   assert.equal(sidebarMarkup.includes("floating-search"), false);
   assert.equal(sidebarMarkup.includes("Settings"), false);
 
+  const collapsedSidebarMarkup = renderToStaticMarkup(
+    createElement(Sidebar, {
+      collapsed: true,
+      datePreset: "all",
+      imageTotal: 42,
+      loading: false,
+      promptState: "all",
+      sessionId: undefined,
+      sessions: [],
+      onDatePresetChange: noop,
+      onPromptStateChange: noop,
+      onSessionChange: noop
+    })
+  );
+  assert.match(collapsedSidebarMarkup, /rail-brand/);
+  assert.match(collapsedSidebarMarkup, /alt="CoMate"/);
+  assert.equal(collapsedSidebarMarkup.includes(">CM<"), false);
+
   const detailMarkup = renderToStaticMarkup(createElement(DetailPanel, { image }));
   const promptIndex = detailMarkup.indexOf(">Prompt<");
+  const detailsIndex = detailMarkup.indexOf(">Details<");
   const titleIndex = detailMarkup.indexOf(">Title<");
   assert.ok(promptIndex >= 0);
-  assert.ok(titleIndex > promptIndex);
+  assert.ok(detailsIndex > promptIndex);
+  assert.ok(titleIndex > detailsIndex);
+  assert.match(detailMarkup, /class="detail-section prompt-section"/);
+  assert.match(detailMarkup, /class="detail-section metadata-section"/);
+  assert.match(detailMarkup, /aria-label="Copy prompt"/);
+}
+
+function testWorkspaceLayoutModel(): void {
+  const image = {
+    id: "image-a",
+    filePath: "/tmp/image-a.png",
+    fileName: "ig_image_a.png",
+    sessionId: "session-a",
+    threadName: "制作 Apple 3D 海报",
+    generatedAt: "2026-05-21T11:46:07.558Z",
+    fileModifiedAt: "2026-05-21T11:46:07.558Z",
+    prompt: "Create a clean Apple poster with glass detail.",
+    width: 1,
+    height: 1,
+    sizeBytes: 68,
+    callId: "ig_image_a",
+    sessionPath: "/tmp/session.jsonl",
+    hasPrompt: true
+  };
+
+  assert.equal(togglePanelState("expanded"), "collapsed");
+  assert.equal(togglePanelState("collapsed"), "expanded");
+  assert.equal(getWorkspaceClassName({ left: "expanded", right: "collapsed" }), "workspace right-collapsed");
+  assert.equal(getWorkspaceClassName({ left: "collapsed", right: "collapsed" }), "workspace left-collapsed right-collapsed");
+
+  const selectedHeader = getImageWorkspaceHeader({
+    datePreset: "week",
+    imageTotal: 7,
+    loading: false,
+    promptState: "withPrompt",
+    query: "Apple",
+    selectedImage: image,
+    sessionId: image.sessionId
+  });
+  assert.equal(selectedHeader.title, "图片浏览");
+  assert.match(selectedHeader.context, /7 images/);
+  assert.match(selectedHeader.context, /Last 7 days/);
+  assert.match(selectedHeader.context, /with prompts/);
+  assert.match(selectedHeader.context, /Search: Apple/);
+  assert.match(selectedHeader.context, /session scoped/);
+
+  const fallbackHeader = getImageWorkspaceHeader({
+    datePreset: "all",
+    imageTotal: 0,
+    loading: true,
+    promptState: "all",
+    query: "",
+    selectedImage: null,
+    sessionId: undefined
+  });
+  assert.equal(fallbackHeader.title, "图片浏览");
+  assert.match(fallbackHeader.context, /Loading/);
+}
+
+function testWorkspaceBarRendering(): void {
+  const noop = () => undefined;
+  const expandedMarkup = renderToStaticMarkup(
+    createElement(WorkspaceBar, {
+      leftPanelState: "expanded",
+      metaVisible: true,
+      refreshing: false,
+      rightPanelState: "expanded",
+      title: "Images",
+      onMetaVisibleChange: noop,
+      onRefresh: noop,
+      onSearchOpen: noop,
+      onToggleLeftPanel: noop,
+      onToggleRightPanel: noop
+    })
+  );
+
+  assert.match(expandedMarkup, /class="workspace-bar"/);
+  assert.match(expandedMarkup, /Collapse sidebar/);
+  assert.match(expandedMarkup, /Collapse inspector/);
+  assert.match(expandedMarkup, /data-panel-side="left"/);
+  assert.match(expandedMarkup, /data-panel-side="right"/);
+  assert.match(expandedMarkup, /aria-expanded="true"/);
+  assert.match(expandedMarkup, />Search</);
+  assert.match(expandedMarkup, /Hide grid details/);
+  assert.match(expandedMarkup, /workspace-detail-toggle/);
+  assert.match(expandedMarkup, /aria-pressed="true"/);
+
+  const collapsedMarkup = renderToStaticMarkup(
+    createElement(WorkspaceBar, {
+      leftPanelState: "collapsed",
+      metaVisible: false,
+      refreshing: true,
+      rightPanelState: "collapsed",
+      title: "Morning brief",
+      onMetaVisibleChange: noop,
+      onRefresh: noop,
+      onSearchOpen: noop,
+      onToggleLeftPanel: noop,
+      onToggleRightPanel: noop
+    })
+  );
+
+  assert.match(collapsedMarkup, /Expand sidebar/);
+  assert.match(collapsedMarkup, /Expand inspector/);
+  assert.match(collapsedMarkup, /aria-expanded="false"/);
+  assert.match(collapsedMarkup, /Show grid details/);
+  assert.match(collapsedMarkup, /workspace-detail-toggle/);
+  assert.match(collapsedMarkup, /aria-pressed="false"/);
+  assert.match(collapsedMarkup, /spin/);
 }
 
 function testGalleryViewRendering(): void {
@@ -299,11 +443,9 @@ function testGalleryViewRendering(): void {
       loading: false,
       metaVisible: true,
       selectedId: image.id,
-      onMetaVisibleChange: noop,
       onSelect: noop
     })
   );
-  assert.match(detailedMarkup, /title="Hide details"/);
   assert.match(detailedMarkup, /class="tile-meta"/);
 
   const cleanMarkup = renderToStaticMarkup(
@@ -312,11 +454,9 @@ function testGalleryViewRendering(): void {
       loading: false,
       metaVisible: false,
       selectedId: image.id,
-      onMetaVisibleChange: noop,
       onSelect: noop
     })
   );
-  assert.match(cleanMarkup, /title="Show details"/);
   assert.match(cleanMarkup, /gallery gallery-clean/);
   assert.equal(cleanMarkup.includes('class="tile-meta"'), false);
 }

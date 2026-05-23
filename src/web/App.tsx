@@ -7,6 +7,13 @@ import { GalleryPane } from "./components/GalleryPane.js";
 import { SearchOverlay } from "./components/SearchOverlay.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { StartupScreen, type StartupScreenMode } from "./components/StartupScreen.js";
+import { WorkspaceBar } from "./components/WorkspaceBar.js";
+import {
+  getImageWorkspaceHeader,
+  getWorkspaceClassName,
+  togglePanelState,
+  type WorkspacePanelState
+} from "./domain/workspaceLayout.js";
 
 const EMPTY_RESULT: ImageSearchResult = {
   items: [],
@@ -29,6 +36,8 @@ export function App() {
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [result, setResult] = useState<ImageSearchResult>(EMPTY_RESULT);
   const [galleryMetaVisible, setGalleryMetaVisible] = useState(true);
+  const [leftPanelState, setLeftPanelState] = useState<WorkspacePanelState>("expanded");
+  const [rightPanelState, setRightPanelState] = useState<WorkspacePanelState>("expanded");
   const [searchOpen, setSearchOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -134,6 +143,20 @@ export function App() {
     () => result.items.find((image) => image.id === selectedId) ?? null,
     [result.items, selectedId]
   );
+  const workspaceHeader = useMemo(
+    () =>
+      getImageWorkspaceHeader({
+        datePreset,
+        imageTotal: result.total,
+        loading,
+        promptState,
+        query,
+        selectedImage,
+        sessionId
+      }),
+    [datePreset, loading, promptState, query, result.total, selectedImage, sessionId]
+  );
+  const workspaceClassName = getWorkspaceClassName({ left: leftPanelState, right: rightPanelState });
 
   async function handleRefresh(): Promise<void> {
     setRefreshing(true);
@@ -187,31 +210,41 @@ export function App() {
     <div className="app-shell">
       {error ? <div className="error-strip">{error}</div> : null}
 
-      <div className="workspace">
+      <div className={workspaceClassName}>
         <Sidebar
+          collapsed={leftPanelState === "collapsed"}
           datePreset={datePreset}
           imageTotal={result.total}
           loading={loading}
           promptState={promptState}
-          query={query}
-          refreshing={refreshing}
           sessionId={sessionId}
           sessions={result.facets.sessions}
           onDatePresetChange={setDatePreset}
           onPromptStateChange={setPromptState}
-          onRefresh={handleRefresh}
-          onSearchOpen={() => setSearchOpen(true)}
           onSessionChange={setSessionId}
         />
-        <GalleryPane
-          images={result.items}
-          loading={loading}
-          metaVisible={galleryMetaVisible}
-          selectedId={selectedId}
-          onMetaVisibleChange={setGalleryMetaVisible}
-          onSelect={selectImage}
-        />
-        <DetailPanel image={selectedImage} />
+        <section className="main-workspace" aria-label="Image workspace">
+          <WorkspaceBar
+            leftPanelState={leftPanelState}
+            metaVisible={galleryMetaVisible}
+            refreshing={refreshing}
+            rightPanelState={rightPanelState}
+            title={workspaceHeader.title}
+            onMetaVisibleChange={setGalleryMetaVisible}
+            onRefresh={handleRefresh}
+            onSearchOpen={() => setSearchOpen(true)}
+            onToggleLeftPanel={() => setLeftPanelState((current) => togglePanelState(current))}
+            onToggleRightPanel={() => setRightPanelState((current) => togglePanelState(current))}
+          />
+          <GalleryPane
+            images={result.items}
+            loading={loading}
+            metaVisible={galleryMetaVisible}
+            selectedId={selectedId}
+            onSelect={selectImage}
+          />
+        </section>
+        <DetailPanel collapsed={rightPanelState === "collapsed"} image={selectedImage} />
       </div>
 
       <SearchOverlay
