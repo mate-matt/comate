@@ -2085,8 +2085,7 @@ button:disabled {
     padding: 0;
   }
 
-  .workspace-search-button span,
-  .workspace-tool-button[aria-label="More actions"] {
+  .workspace-search-button span {
     display: none;
   }
 

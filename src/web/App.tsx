@@ -362,7 +362,6 @@ export function App() {
             leftPanelState={leftPanelState}
             metaVisible={galleryMetaVisible}
             metaToggleVisible={activeModule === "gallery"}
-            moreVisible={activeModule === "gallery"}
             refreshing={activeModule === "gallery" ? refreshing : capabilityRefreshing}
             refreshLabel={activeModule === "gallery" ? "Refresh library" : "Rescan capabilities"}
             rightPanelState={rightPanelState}

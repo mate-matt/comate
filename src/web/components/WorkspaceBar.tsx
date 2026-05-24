@@ -1,7 +1,6 @@
 import {
   Captions,
   CaptionsOff,
-  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -16,7 +15,6 @@ interface WorkspaceBarProps {
   leftPanelState: WorkspacePanelState;
   metaVisible: boolean;
   metaToggleVisible?: boolean;
-  moreVisible?: boolean;
   refreshing: boolean;
   refreshLabel?: string;
   rightPanelState: WorkspacePanelState;
@@ -33,7 +31,6 @@ export function WorkspaceBar({
   leftPanelState,
   metaVisible,
   metaToggleVisible = true,
-  moreVisible = true,
   refreshing,
   refreshLabel = "Refresh library",
   rightPanelState,
@@ -104,11 +101,6 @@ export function WorkspaceBar({
         >
           <RefreshCcw size={15} aria-hidden="true" className={refreshing ? "spin" : undefined} />
         </button>
-        {moreVisible ? (
-          <button className="workspace-tool-button" type="button" title="More actions" aria-label="More actions">
-            <MoreHorizontal size={15} aria-hidden="true" />
-          </button>
-        ) : null}
       </div>
 
       <button
