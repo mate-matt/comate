@@ -1,7 +1,12 @@
 import electron from "electron";
 import type { BrowserWindow as BrowserWindowType } from "electron";
 
-import { DESKTOP_WINDOW_CONFIG, getInitialWindowBounds, type DesktopWindowBounds } from "../domain/windowState.js";
+import {
+  DESKTOP_WINDOW_CONFIG,
+  getDesktopWindowChromeOptions,
+  getInitialWindowBounds,
+  type DesktopWindowBounds
+} from "../domain/windowState.js";
 import { installNavigationGuard } from "./navigationGuard.js";
 
 const { BrowserWindow } = electron;
@@ -20,6 +25,7 @@ export function createMainWindow(url: string, options: CreateMainWindowOptions =
     minWidth: DESKTOP_WINDOW_CONFIG.minWidth,
     show: false,
     title: "CoMate",
+    ...getDesktopWindowChromeOptions(process.platform),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

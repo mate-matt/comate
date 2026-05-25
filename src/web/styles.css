@@ -19,6 +19,11 @@
   --radius-panel: 22px;
   --radius-control: 12px;
   --global-rail-width: 64px;
+  --window-drag-height: 34px;
+  --rail-control-safe-top: 72px;
+  --rail-content-offset-x: 7px;
+  --workspace-outer-inset: 12px;
+  --workspace-gap: 10px;
   --workspace-bar-height: 52px;
   --motion-panel: 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
   font-synthesis: none;
@@ -42,10 +47,20 @@ body,
 button,
 input {
   font: inherit;
+  -webkit-app-region: no-drag;
 }
 
 button {
   cursor: pointer;
+}
+
+a,
+[role="button"],
+[role="separator"],
+input,
+select,
+textarea {
+  -webkit-app-region: no-drag;
 }
 
 button:focus-visible,
@@ -68,6 +83,16 @@ button:disabled {
     linear-gradient(155deg, rgba(255, 255, 255, 0.99) 0%, rgba(252, 254, 255, 0.86) 46%, rgba(231, 243, 250, 0.22) 100%),
     linear-gradient(26deg, rgba(225, 242, 251, 0.24), rgba(250, 253, 255, 0.95) 48%, rgba(233, 246, 252, 0.24)),
     var(--app-bg);
+}
+
+.window-drag-region {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: calc(var(--global-rail-width) + 28px);
+  z-index: 25;
+  height: var(--window-drag-height);
+  -webkit-app-region: drag;
 }
 
 .startup-screen {
@@ -231,11 +256,11 @@ button:disabled {
 .workspace {
   display: grid;
   grid-template-columns: var(--global-rail-width) var(--left-panel-width, 204px) minmax(0, 1fr) 348px;
-  gap: 10px;
+  gap: var(--workspace-gap);
   height: 100vh;
   min-height: 0;
   overflow: hidden;
-  padding: 14px;
+  padding: 0 var(--workspace-outer-inset) var(--workspace-outer-inset) 0;
   transition: grid-template-columns var(--motion-panel);
 }
 
@@ -266,27 +291,21 @@ button:disabled {
   position: relative;
   min-width: 0;
   min-height: 0;
-  height: 100%;
+  height: 100vh;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   justify-items: center;
-  gap: 8px;
-  padding: 12px 8px;
-  overflow: hidden;
-  border: 1px solid var(--glass-hairline);
-  border-radius: 22px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(247, 252, 255, 0.44)),
-    rgba(246, 251, 254, 0.42);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.36),
-    0 18px 48px rgba(52, 78, 101, 0.1);
-  -webkit-backdrop-filter: blur(38px) saturate(1.14) contrast(1.04);
-  backdrop-filter: blur(38px) saturate(1.14) contrast(1.04);
+  gap: 7px;
+  padding: var(--rail-control-safe-top) 8px 14px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
-.global-rail::before,
 .sidebar::before,
 .main-workspace::before,
 .detail-panel::before {
@@ -302,15 +321,16 @@ button:disabled {
 }
 
 .global-rail-brand {
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   display: block;
   overflow: hidden;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.26);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.8),
-    0 14px 30px rgba(17, 43, 64, 0.22);
+    0 12px 26px rgba(42, 84, 118, 0.18);
+  transform: translateX(var(--rail-content-offset-x));
 }
 
 .global-rail-brand img {
@@ -324,6 +344,7 @@ button:disabled {
   color: #0f1f33;
   font-size: 11px;
   font-weight: 740;
+  transform: translateX(var(--rail-content-offset-x));
 }
 
 .global-rail-nav {
@@ -332,17 +353,18 @@ button:disabled {
   display: grid;
   align-content: start;
   justify-items: center;
-  gap: 10px;
-  margin-top: 10px;
+  gap: 9px;
+  margin-top: 14px;
+  transform: translateX(var(--rail-content-offset-x));
 }
 
 .global-rail-button {
   position: relative;
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(82, 112, 138, 0.14);
+  border: 1px solid rgba(82, 112, 138, 0.1);
   border-radius: 14px;
   background: transparent;
   color: rgba(20, 34, 50, 0.8);
@@ -354,17 +376,41 @@ button:disabled {
     color 160ms ease;
 }
 
-.global-rail-button:hover,
-.global-rail-button.active {
-  border-color: rgba(74, 105, 132, 0.24);
+.global-rail-button:hover {
+  border-color: rgba(74, 105, 132, 0.2);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(244, 250, 254, 0.54)),
-    rgba(255, 255, 255, 0.46);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(244, 250, 254, 0.42)),
+    rgba(255, 255, 255, 0.34);
   color: #0f1f33;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.88),
     inset 0 0 0 1px rgba(255, 255, 255, 0.42),
-    0 10px 22px rgba(52, 78, 101, 0.08);
+    0 8px 18px rgba(52, 78, 101, 0.06);
+}
+
+.global-rail-button.active {
+  border-color: rgba(63, 130, 247, 0.42);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(238, 247, 255, 0.62)),
+    rgba(255, 255, 255, 0.62);
+  color: #0f55d8;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.48),
+    0 0 0 1px rgba(63, 130, 247, 0.16),
+    0 10px 24px rgba(63, 130, 247, 0.12);
+}
+
+.global-rail-button.active::after {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  width: 5px;
+  height: 5px;
+  content: "";
+  border-radius: 999px;
+  background: #3f82f7;
+  box-shadow: 0 0 0 3px rgba(63, 130, 247, 0.16);
 }
 
 .global-rail-button svg {
@@ -379,7 +425,8 @@ button:disabled {
 .sidebar {
   position: relative;
   min-height: 0;
-  height: 100%;
+  height: calc(100vh - var(--window-drag-height) - var(--workspace-outer-inset));
+  margin-top: var(--window-drag-height);
   overflow: hidden;
   overscroll-behavior: contain;
   display: grid;
@@ -770,6 +817,8 @@ button:disabled {
   position: relative;
   min-width: 0;
   min-height: 0;
+  height: calc(100vh - var(--window-drag-height) - var(--workspace-outer-inset));
+  margin-top: var(--window-drag-height);
   overflow: hidden;
   border: 1px solid var(--glass-hairline);
   border-radius: var(--radius-panel);
@@ -1750,7 +1799,8 @@ button:disabled {
 .detail-panel {
   position: relative;
   min-height: 0;
-  height: 100%;
+  height: calc(100vh - var(--window-drag-height) - var(--workspace-outer-inset));
+  margin-top: var(--window-drag-height);
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;

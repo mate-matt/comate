@@ -1,4 +1,4 @@
-import type { ImageRecord } from "../../shared/types.js";
+import type { ImageCopyResult, ImageRecord } from "../../shared/types.js";
 
 export interface CodexPaths {
   codexRoot: string;
@@ -44,4 +44,8 @@ export interface ImageIndexStore {
   getById(id: string): ImageRecord | null;
   count(): number;
   close(): void;
+}
+
+export interface ImageClipboardService {
+  copyImageFile(filePath: string): Promise<ImageCopyResult>;
 }

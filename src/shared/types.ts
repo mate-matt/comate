@@ -47,6 +47,12 @@ export interface ImageSearchResult {
   };
 }
 
+export interface ImageCopyResult {
+  mimeType: string;
+  native: boolean;
+  size: number;
+}
+
 export interface ReindexResult {
   indexed: number;
   scannedAt: string;

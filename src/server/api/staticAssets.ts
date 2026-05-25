@@ -36,15 +36,28 @@ export function serveStaticFile(staticDir: string, requestPath: string, response
   return true;
 }
 
-function normalizeStaticPath(staticDir: string, requestPath: string): string | null {
-  const decodedPath = decodeURIComponent(requestPath.split("?")[0] ?? "/");
+export function normalizeStaticPath(staticDir: string, requestPath: string): string | null {
+  const decodedPath = safeDecodePath(requestPath);
+  if (decodedPath === null) {
+    return null;
+  }
+
   const relativePath = decodedPath === "/" ? "index.html" : decodedPath.replace(/^\/+/, "");
   const resolved = path.resolve(staticDir, relativePath);
   const root = path.resolve(staticDir);
+  const relativeToRoot = path.relative(root, resolved);
 
-  if (!resolved.startsWith(root)) {
+  if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
     return null;
   }
 
   return resolved;
+}
+
+function safeDecodePath(requestPath: string): string | null {
+  try {
+    return decodeURIComponent(requestPath.split("?")[0] ?? "/");
+  } catch {
+    return null;
+  }
 }

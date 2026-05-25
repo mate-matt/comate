@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { URL } from "node:url";
 
 import type { DatePreset, ImageSearchParams, PromptState } from "../../shared/types.js";
-import type { CodexPaths, ImageIndexStore } from "../domain/types.js";
+import type { CodexPaths, ImageClipboardService, ImageIndexStore } from "../domain/types.js";
 import type { IndexingService } from "../application/indexingService.js";
 import type { CodexCapabilityScanner } from "../infrastructure/codexCapabilityScanner.js";
 import { FileLauncher, type FileLaunchAction } from "../infrastructure/fileLauncher.js";
@@ -14,6 +14,7 @@ import { serveStaticFile } from "./staticAssets.js";
 interface CreateServerOptions {
   capabilities: CodexCapabilityScanner;
   codexPaths: CodexPaths;
+  imageClipboard?: ImageClipboardService;
   index: ImageIndexStore;
   indexing: IndexingService;
   launcher: FileLauncher;
@@ -147,6 +148,23 @@ async function handleApiRequest(
 
     options.launcher.open(record.filePath, action);
     sendJson(response, 200, { ok: true });
+    return;
+  }
+
+  const imageCopyMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/copy$/);
+  if (request.method === "POST" && imageCopyMatch) {
+    if (!options.imageClipboard) {
+      sendError(response, 501, "Native image clipboard is not available.");
+      return;
+    }
+
+    const record = options.index.getById(decodeURIComponent(imageCopyMatch[1]!));
+    if (!record) {
+      sendError(response, 404, "Image not found.");
+      return;
+    }
+
+    sendJson(response, 200, await options.imageClipboard.copyImageFile(record.filePath));
     return;
   }
 

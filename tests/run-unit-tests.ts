@@ -6,9 +6,16 @@ import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { CapabilityRecord, CapabilityScanResult, ImageRecord, ImageSearchResult } from "../src/shared/types.js";
+import type {
+  CapabilityRecord,
+  CapabilityScanResult,
+  ImageCopyResult,
+  ImageRecord,
+  ImageSearchResult
+} from "../src/shared/types.js";
 import { LibraryService } from "../src/server/application/libraryService.js";
 import { startCoMateRuntime } from "../src/server/application/serverRuntime.js";
+import { normalizeStaticPath } from "../src/server/api/staticAssets.js";
 import { detectCodexDesktopData } from "../src/server/infrastructure/codexDesktopDetector.js";
 import { CodexCapabilityScanner } from "../src/server/infrastructure/codexCapabilityScanner.js";
 import { CodexImageScanner } from "../src/server/infrastructure/codexImageScanner.js";
@@ -21,6 +28,7 @@ import {
 } from "../src/desktop/domain/staticAssets.js";
 import {
   DESKTOP_WINDOW_CONFIG,
+  getDesktopWindowChromeOptions,
   getInitialWindowBounds,
   sanitizeWindowBounds,
   toPersistedWindowBounds
@@ -83,6 +91,12 @@ async function main(): Promise<void> {
     console.log("ok web/image-clipboard");
     testDesktopDomainModels();
     console.log("ok desktop/domain");
+    testStaticAssetPathModel();
+    console.log("ok server/static-assets");
+    await testDesktopChromeCss();
+    console.log("ok web/desktop-chrome-css");
+    await testCoMateIconAsset();
+    console.log("ok assets/comate-icon");
     testStartupScreenRendering();
     console.log("ok web/startup-screen");
     testGalleryViewRendering();
@@ -91,6 +105,8 @@ async function main(): Promise<void> {
     console.log("ok web/capability-ui");
     await testEmbeddedRuntime(root);
     console.log("ok desktop/runtime");
+    await testDesktopNativeClipboardEndpoint(root);
+    console.log("ok desktop/native-clipboard");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -140,12 +156,54 @@ function testDesktopDomainModels(): void {
     height: DESKTOP_WINDOW_CONFIG.defaultHeight,
     width: DESKTOP_WINDOW_CONFIG.defaultWidth
   });
+  assert.equal(DESKTOP_WINDOW_CONFIG.backgroundColor, "#f6fbfe");
+  assert.deepEqual(getDesktopWindowChromeOptions("darwin"), {
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: {
+      x: 18,
+      y: 14
+    }
+  });
+  assert.deepEqual(getDesktopWindowChromeOptions("linux"), {});
   assert.deepEqual(toPersistedWindowBounds({ width: 1180, height: 820, x: 44, y: 36 }), {
     height: 820,
     width: 1180,
     x: 44,
     y: 36
   });
+}
+
+function testStaticAssetPathModel(): void {
+  const staticDir = path.join("/", "tmp", "comate", "dist-web");
+  assert.equal(normalizeStaticPath(staticDir, "/"), path.join(staticDir, "index.html"));
+  assert.equal(normalizeStaticPath(staticDir, "/assets/app.js"), path.join(staticDir, "assets", "app.js"));
+  assert.equal(normalizeStaticPath(staticDir, "/%"), null);
+  assert.equal(normalizeStaticPath(staticDir, "/../secret.txt"), null);
+  assert.equal(normalizeStaticPath(staticDir, "/..%2Fsecret.txt"), null);
+}
+
+async function testDesktopChromeCss(): Promise<void> {
+  const css = await fs.readFile(path.join(process.cwd(), "src", "web", "styles.css"), "utf8");
+  assert.match(css, /--window-drag-height:\s*34px/);
+  assert.match(css, /--rail-control-safe-top:\s*72px/);
+  assert.match(css, /--rail-content-offset-x:\s*7px/);
+  assert.match(css, /\.window-drag-region\s*{[\s\S]*-webkit-app-region:\s*drag/);
+  assert.match(css, /\.global-rail\s*{[\s\S]*height:\s*100vh;[\s\S]*border:\s*0;[\s\S]*border-radius:\s*0;[\s\S]*background:\s*transparent;[\s\S]*box-shadow:\s*none;/);
+  assert.match(css, /\.global-rail-nav\s*{[\s\S]*transform:\s*translateX\(var\(--rail-content-offset-x\)\)/);
+  assert.match(css, /\.global-rail-button\.active\s*{[\s\S]*border-color:\s*rgba\(63,\s*130,\s*247,\s*0\.42\)/);
+  assert.match(css, /\.global-rail-button\.active::after\s*{[\s\S]*background:\s*#3f82f7/);
+  assert.match(css, /\.sidebar\s*{[\s\S]*margin-top:\s*var\(--window-drag-height\)/);
+  assert.match(css, /\.main-workspace\s*{[\s\S]*margin-top:\s*var\(--window-drag-height\)/);
+  assert.match(css, /\.detail-panel\s*{[\s\S]*margin-top:\s*var\(--window-drag-height\)/);
+}
+
+async function testCoMateIconAsset(): Promise<void> {
+  const svg = await fs.readFile(path.join(process.cwd(), "assets", "comate-icon.svg"), "utf8");
+  assert.match(svg, /id="glass"/);
+  assert.match(svg, /id="accent"/);
+  assert.match(svg, /fill="#ffffff" fill-opacity="0\.5"/);
+  assert.match(svg, /font-size="278"/);
+  assert.match(svg, />CM<\/text>/);
 }
 
 async function testCodexDesktopDetection(root: string): Promise<void> {
@@ -833,9 +891,30 @@ async function testImageClipboardModel(): Promise<void> {
     }) as typeof fetch
   });
 
-  assert.deepEqual(result, { mimeType: "image/png", size: 11 });
+  assert.deepEqual(result, { mimeType: "image/png", native: false, size: 11 });
   assert.equal(writes.length, 1);
   assert.equal(requestedUrls[0], "/api/images/image-a/file?v=2026-05-21T11%3A46%3A07.558Z");
+
+  const nativeResult = await copyImageBinaryToClipboard(image, {
+    ClipboardItem: null,
+    clipboard: null,
+    fetch: null,
+    nativeCopyImage: async () => ({ mimeType: "image/png", native: true, size: 68 })
+  });
+  assert.deepEqual(nativeResult, { mimeType: "image/png", native: true, size: 68 });
+
+  const fallbackResult = await copyImageBinaryToClipboard(image, {
+    ClipboardItem: MockClipboardItem as unknown as typeof ClipboardItem,
+    clipboard: {
+      write: async () => undefined
+    },
+    fetch: (async () => new Response(new Blob(["fallback"], { type: "image/png" }), { status: 200 })) as typeof fetch,
+    nativeCopyImage: async () => {
+      throw new Error("Native clipboard unavailable.");
+    }
+  });
+  assert.deepEqual(fallbackResult, { mimeType: "image/png", native: false, size: 8 });
+
   assert.equal(getClipboardImageMimeType("", "photo.jpeg"), "image/jpeg");
   assert.equal(getClipboardImageMimeType("", "photo.webp"), "image/webp");
   assert.equal(getClipboardImageMimeType("", "photo.png"), "image/png");
@@ -1088,6 +1167,68 @@ async function testEmbeddedRuntime(root: string): Promise<void> {
     assert.equal(status.indexing.indexed, 0);
     assert.equal(status.localOnly, true);
     assert.equal(status.targetApp, "Codex Desktop");
+  } finally {
+    await runtime.close();
+  }
+}
+
+async function testDesktopNativeClipboardEndpoint(root: string): Promise<void> {
+  const sessionId = "019e4a58-2295-78d2-ae37-3a8c0f2fa4dc";
+  const codexRoot = path.join(root, ".codex-native-clipboard");
+  const generatedImagesDir = path.join(codexRoot, "generated_images");
+  const imageDir = path.join(generatedImagesDir, sessionId);
+  const sessionsDir = path.join(codexRoot, "sessions");
+  const databasePath = path.join(root, "native-clipboard.sqlite");
+  const imagePath = path.join(imageDir, "ig_native_clipboard.png");
+  const copiedPaths: string[] = [];
+  const port = await findAvailablePort(48_980);
+
+  await fs.mkdir(imageDir, { recursive: true });
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await fs.writeFile(imagePath, Buffer.from(PNG_1X1, "base64"));
+
+  const runtime = await startCoMateRuntime({
+    codexPaths: {
+      codexRoot,
+      databasePath,
+      generatedImagesDir,
+      sessionIndexPath: path.join(codexRoot, "session_index.jsonl"),
+      sessionsDir
+    },
+    imageClipboard: {
+      copyImageFile: async (filePath) => {
+        copiedPaths.push(filePath);
+        const stat = await fs.stat(filePath);
+        return {
+          mimeType: "image/png",
+          native: true,
+          size: stat.size
+        } satisfies ImageCopyResult;
+      }
+    },
+    port,
+    staticDir: null
+  });
+
+  try {
+    await runtime.initialIndex;
+    const imageResponse = await fetch(`${runtime.url}/api/images`);
+    const images = (await imageResponse.json()) as ImageSearchResult;
+    assert.equal(images.total, 1);
+
+    const image = images.items[0]!;
+    const copyResponse = await fetch(`${runtime.url}/api/images/${encodeURIComponent(image.id)}/copy`, {
+      method: "POST"
+    });
+    const copyResult = (await copyResponse.json()) as ImageCopyResult;
+
+    assert.equal(copyResponse.ok, true);
+    assert.deepEqual(copyResult, {
+      mimeType: "image/png",
+      native: true,
+      size: Buffer.from(PNG_1X1, "base64").length
+    });
+    assert.deepEqual(copiedPaths, [imagePath]);
   } finally {
     await runtime.close();
   }

@@ -6,7 +6,7 @@ export interface DesktopWindowBounds {
 }
 
 export const DESKTOP_WINDOW_CONFIG = {
-  backgroundColor: "#f5f5f2",
+  backgroundColor: "#f6fbfe",
   defaultHeight: 860,
   defaultWidth: 1280,
   maxHeight: 2400,
@@ -14,6 +14,28 @@ export const DESKTOP_WINDOW_CONFIG = {
   minHeight: 700,
   minWidth: 1040
 } as const;
+
+export interface DesktopWindowChromeOptions {
+  titleBarStyle?: "hiddenInset";
+  trafficLightPosition?: {
+    x: number;
+    y: number;
+  };
+}
+
+export function getDesktopWindowChromeOptions(platform: NodeJS.Platform): DesktopWindowChromeOptions {
+  if (platform !== "darwin") {
+    return {};
+  }
+
+  return {
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: {
+      x: 18,
+      y: 14
+    }
+  };
+}
 
 export function getInitialWindowBounds(savedBounds: DesktopWindowBounds | null | undefined): DesktopWindowBounds {
   return sanitizeWindowBounds(savedBounds) ?? {

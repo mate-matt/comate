@@ -1,5 +1,6 @@
 import type {
   CapabilityScanResult,
+  ImageCopyResult,
   ImageRecord,
   ImageSearchParams,
   ImageSearchResult,
@@ -50,6 +51,14 @@ export async function openImage(id: string, action: "openFile" | "revealFile"): 
   });
 
   await readJson(response);
+}
+
+export async function copyImageToNativeClipboard(id: string): Promise<ImageCopyResult> {
+  const response = await fetch(`/api/images/${encodeURIComponent(id)}/copy`, {
+    method: "POST"
+  });
+
+  return readJson<ImageCopyResult>(response);
 }
 
 export async function openCapabilityPath(filePath: string, action: "openFile" | "revealFile"): Promise<void> {

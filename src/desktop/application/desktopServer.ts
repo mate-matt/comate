@@ -1,6 +1,7 @@
 import { startCoMateRuntime, type CoMateRuntime } from "../../server/application/serverRuntime.js";
 import { DEFAULT_WEB_PORT } from "../../server/config/paths.js";
 import { findAvailablePort } from "../utils/port.js";
+import { createNativeImageClipboard } from "./nativeImageClipboard.js";
 
 export interface StartDesktopServerOptions {
   host?: string;
@@ -14,6 +15,7 @@ export async function startDesktopServer(options: StartDesktopServerOptions): Pr
 
   return startCoMateRuntime({
     host,
+    imageClipboard: createNativeImageClipboard(),
     port,
     staticDir: options.staticDir
   });

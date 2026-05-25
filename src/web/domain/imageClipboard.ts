@@ -1,15 +1,13 @@
-import type { ImageRecord } from "../../shared/types.js";
+import type { ImageCopyResult, ImageRecord } from "../../shared/types.js";
 import { imageFileUrl } from "../api/client.js";
 
-export interface ImageClipboardCopyResult {
-  mimeType: string;
-  size: number;
-}
+export type ImageClipboardCopyResult = ImageCopyResult;
 
 export interface ImageClipboardRuntime {
   ClipboardItem: typeof ClipboardItem | null;
   clipboard: Pick<Clipboard, "write"> | null;
   fetch: typeof fetch | null;
+  nativeCopyImage?: (image: ImageRecord) => Promise<ImageClipboardCopyResult>;
 }
 
 interface CopyShortcutEvent {
@@ -26,11 +24,22 @@ export async function copyImageBinaryToClipboard(
   image: ImageRecord,
   runtime = getImageClipboardRuntime()
 ): Promise<ImageClipboardCopyResult> {
+  const nativeAttempt = await tryNativeImageCopy(image, runtime);
+  if (!nativeAttempt.caught) {
+    return nativeAttempt.result;
+  }
+
   if (!runtime.fetch) {
+    if (nativeAttempt.error) {
+      throw toError(nativeAttempt.error);
+    }
     throw new Error("Image fetch is not available in this environment.");
   }
 
   if (!runtime.clipboard?.write || !runtime.ClipboardItem) {
+    if (nativeAttempt.error) {
+      throw toError(nativeAttempt.error);
+    }
     throw new Error("Image clipboard is not available in this environment.");
   }
 
@@ -42,6 +51,7 @@ export async function copyImageBinaryToClipboard(
 
   return {
     mimeType,
+    native: false,
     size: clipboardBlob.size
   };
 }
@@ -88,12 +98,40 @@ export function shouldHandleImageCopyShortcut(event: CopyShortcutEvent): boolean
   return !isEditableTarget(event.target);
 }
 
-export function getImageClipboardRuntime(): ImageClipboardRuntime {
+export function getImageClipboardRuntime(
+  nativeCopyImage?: (image: ImageRecord) => Promise<ImageClipboardCopyResult>
+): ImageClipboardRuntime {
   return {
     ClipboardItem: typeof globalThis.ClipboardItem === "function" ? globalThis.ClipboardItem : null,
     clipboard: typeof navigator !== "undefined" && navigator.clipboard ? navigator.clipboard : null,
-    fetch: typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null
+    fetch: typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null,
+    nativeCopyImage
   };
+}
+
+async function tryNativeImageCopy(
+  image: ImageRecord,
+  runtime: ImageClipboardRuntime
+): Promise<
+  | { caught: false; result: ImageClipboardCopyResult }
+  | { caught: true; error: unknown }
+> {
+  if (!runtime.nativeCopyImage) {
+    return { caught: true, error: null };
+  }
+
+  try {
+    return {
+      caught: false,
+      result: await runtime.nativeCopyImage(image)
+    };
+  } catch (error) {
+    return { caught: true, error };
+  }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error("Copy image failed.");
 }
 
 function isEditableTarget(target: EventTarget | null | undefined): boolean {

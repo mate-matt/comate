@@ -13,6 +13,7 @@ import {
   fetchCapabilities,
   fetchImages,
   fetchRuntimeStatus,
+  copyImageToNativeClipboard,
   openCapabilityPath,
   reindexLibrary,
   rescanCapabilities
@@ -29,7 +30,11 @@ import { StartupScreen, type StartupScreenMode } from "./components/StartupScree
 import { WorkspaceBar } from "./components/WorkspaceBar.js";
 import { getSidebarWidthCssValue, SIDEBAR_WIDTH_CONFIG } from "./domain/sidebarResize.js";
 import { filterCapabilities, getSelectedCapability } from "./domain/capabilityView.js";
-import { copyImageBinaryToClipboard, shouldHandleImageCopyShortcut } from "./domain/imageClipboard.js";
+import {
+  copyImageBinaryToClipboard,
+  getImageClipboardRuntime,
+  shouldHandleImageCopyShortcut
+} from "./domain/imageClipboard.js";
 import { type AppModule, type CapabilitySection, getModuleTitle } from "./domain/navigation.js";
 import {
   getImageWorkspaceHeader,
@@ -213,7 +218,10 @@ export function App() {
     }
 
     try {
-      await copyImageBinaryToClipboard(selectedImage);
+      await copyImageBinaryToClipboard(
+        selectedImage,
+        getImageClipboardRuntime((image) => copyImageToNativeClipboard(image.id))
+      );
       setError(null);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Copy image failed.");
@@ -367,11 +375,17 @@ export function App() {
 
   const startupMode = getStartupMode(runtimeStatus, statusError);
   if (startupMode) {
-    return <StartupScreen mode={startupMode} status={runtimeStatus} error={statusError} onRetry={handleStartupRetry} />;
+    return (
+      <>
+        <WindowDragRegion />
+        <StartupScreen mode={startupMode} status={runtimeStatus} error={statusError} onRetry={handleStartupRetry} />
+      </>
+    );
   }
 
   return (
     <div className="app-shell">
+      <WindowDragRegion />
       {error ? <div className="error-strip">{error}</div> : null}
 
       <div className={workspaceClassName} style={workspaceStyle}>
@@ -470,6 +484,10 @@ export function App() {
       ) : null}
     </div>
   );
+}
+
+function WindowDragRegion() {
+  return <div className="window-drag-region" aria-hidden="true" />;
 }
 
 function isLibraryReady(status: RuntimeStatus | null): boolean {

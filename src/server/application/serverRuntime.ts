@@ -12,9 +12,11 @@ import { SqliteImageIndex } from "../infrastructure/sqliteImageIndex.js";
 import { IndexingService } from "./indexingService.js";
 import { LibraryService } from "./libraryService.js";
 import type { ReindexResult } from "../../shared/types.js";
+import type { ImageClipboardService } from "../domain/types.js";
 
 export interface CoMateRuntime {
   close: () => Promise<void>;
+  codexPaths: CodexPaths;
   initialIndex: Promise<ReindexResult>;
   port: number;
   server: Server;
@@ -24,6 +26,7 @@ export interface CoMateRuntime {
 export interface StartCoMateRuntimeOptions {
   codexPaths?: Partial<CodexPaths>;
   host?: string;
+  imageClipboard?: ImageClipboardService;
   port: number;
   staticDir: string | null;
 }
@@ -44,6 +47,7 @@ export async function startCoMateRuntime(options: StartCoMateRuntimeOptions): Pr
     const server = createCoMateServer({
       capabilities: new CodexCapabilityScanner({ codexRoot: codexPaths.codexRoot, projectRoot: process.cwd() }),
       codexPaths,
+      imageClipboard: options.imageClipboard,
       index,
       indexing,
       launcher: new FileLauncher(),
@@ -54,6 +58,7 @@ export async function startCoMateRuntime(options: StartCoMateRuntimeOptions): Pr
 
     return {
       close: () => closeRuntime(server, index),
+      codexPaths,
       initialIndex,
       port: options.port,
       server,
