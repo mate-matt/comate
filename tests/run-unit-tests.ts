@@ -20,6 +20,7 @@ import { detectCodexDesktopData } from "../src/server/infrastructure/codexDeskto
 import { CodexCapabilityScanner } from "../src/server/infrastructure/codexCapabilityScanner.js";
 import { CodexImageScanner } from "../src/server/infrastructure/codexImageScanner.js";
 import { CodexSessionRepository } from "../src/server/infrastructure/codexSessionRepository.js";
+import { getThumbnailCachePath } from "../src/server/infrastructure/imageThumbnailService.js";
 import { SqliteImageIndex } from "../src/server/infrastructure/sqliteImageIndex.js";
 import { getNavigationDecision } from "../src/desktop/domain/navigationPolicy.js";
 import {
@@ -52,6 +53,7 @@ import {
   SIDEBAR_WIDTH_CONFIG
 } from "../src/web/domain/sidebarResize.js";
 import { filterCapabilities, getCapabilityMenuCount, getSelectedCapability } from "../src/web/domain/capabilityView.js";
+import { canLoadNextImagePage, mergeImagePages } from "../src/web/domain/imagePagination.js";
 import {
   copyImageBinaryToClipboard,
   getClipboardImageMimeType,
@@ -73,6 +75,8 @@ async function main(): Promise<void> {
     console.log("ok codex-desktop/detection");
     await testScannerSessionMergeAndIndex(root);
     console.log("ok scanner/session/index");
+    await testSqliteIncrementalIndex(root);
+    console.log("ok sqlite/incremental-index");
     await testCapabilityScanner(root);
     console.log("ok scanner/capabilities");
     testSearchUiRendering();
@@ -81,6 +85,8 @@ async function main(): Promise<void> {
     console.log("ok web/workspace-layout");
     testCapabilityViewModel();
     console.log("ok web/capability-view");
+    testImagePaginationModel();
+    console.log("ok web/image-pagination");
     testSidebarResizeModel();
     console.log("ok web/sidebar-resize");
     testSidebarResizeHandleRendering();
@@ -89,6 +95,8 @@ async function main(): Promise<void> {
     console.log("ok web/workspace-bar");
     await testImageClipboardModel();
     console.log("ok web/image-clipboard");
+    testThumbnailCacheModel(root);
+    console.log("ok server/thumbnail-cache");
     testDesktopDomainModels();
     console.log("ok desktop/domain");
     testStaticAssetPathModel();
@@ -213,7 +221,8 @@ async function testCodexDesktopDetection(root: string): Promise<void> {
     generatedImagesDir: path.join(missingRoot, "generated_images"),
     sessionIndexPath: path.join(missingRoot, "session_index.jsonl"),
     sessionsDir: path.join(missingRoot, "sessions"),
-    databasePath: path.join(root, "missing.sqlite")
+    databasePath: path.join(root, "missing.sqlite"),
+    thumbnailCacheDir: path.join(root, "missing-thumbnails")
   });
 
   assert.equal(missingStatus.available, false);
@@ -227,7 +236,8 @@ async function testCodexDesktopDetection(root: string): Promise<void> {
     generatedImagesDir: path.join(codexRoot, "generated_images"),
     sessionIndexPath: path.join(codexRoot, "session_index.jsonl"),
     sessionsDir: path.join(codexRoot, "sessions"),
-    databasePath: path.join(root, "detected.sqlite")
+    databasePath: path.join(root, "detected.sqlite"),
+    thumbnailCacheDir: path.join(root, "detected-thumbnails")
   });
 
   assert.equal(detectedStatus.available, true);
@@ -255,7 +265,8 @@ function testStartupScreenRendering(): void {
           indexed: 0,
           scannedAt: new Date().toISOString(),
           durationMs: 0,
-          error: null
+          error: null,
+          progress: { phase: "ready", processed: 0, total: 0 }
         },
         localOnly: true,
         targetApp: "Codex Desktop"
@@ -269,6 +280,38 @@ function testStartupScreenRendering(): void {
   assert.match(markup, /Codex desktop app/);
   assert.match(markup, /Completely local/);
   assert.match(markup, />Retry</);
+
+  const indexingMarkup = renderToStaticMarkup(
+    createElement(StartupScreen, {
+      mode: "indexing",
+      status: {
+        codexDesktop: {
+          available: true,
+          codexRoot: "/tmp/.codex",
+          generatedImagesDir: "/tmp/.codex/generated_images",
+          sessionIndexPath: "/tmp/.codex/session_index.jsonl",
+          sessionsDir: "/tmp/.codex/sessions",
+          existingPaths: ["codexRoot", "generatedImagesDir", "sessionIndexPath", "sessionsDir"],
+          missingPaths: []
+        },
+        indexing: {
+          state: "indexing",
+          indexed: 0,
+          scannedAt: null,
+          durationMs: null,
+          error: null,
+          progress: { phase: "scanning", processed: 3, total: 10 }
+        },
+        localOnly: true,
+        targetApp: "Codex Desktop"
+      },
+      error: null,
+      onRetry: noop
+    })
+  );
+  assert.match(indexingMarkup, /role="progressbar"/);
+  assert.match(indexingMarkup, /aria-valuenow="30"/);
+  assert.match(indexingMarkup, /Scanning 3 of 10 images/);
 }
 
 async function testScannerSessionMergeAndIndex(root: string): Promise<void> {
@@ -346,6 +389,66 @@ async function testScannerSessionMergeAndIndex(root: string): Promise<void> {
 
     const emptySearch = index.search({ query: "not-found", limit: 20 });
     assert.equal(emptySearch.total, 0);
+
+    const progressEvents: Array<{ phase: string; processed: number; total: number }> = [];
+    const rebuildResult = await library.rebuildIndex((progress) => {
+      progressEvents.push(progress);
+    });
+    assert.equal(rebuildResult.indexed, 1);
+    assert.equal(index.count(), 1);
+    assert.ok(progressEvents.some((progress) => progress.phase === "scanning" && progress.total === 1));
+    assert.ok(progressEvents.some((progress) => progress.phase === "linking" && progress.processed === 1));
+    assert.ok(progressEvents.some((progress) => progress.phase === "writing" && progress.processed === 1));
+  } finally {
+    index.close();
+  }
+}
+
+async function testSqliteIncrementalIndex(root: string): Promise<void> {
+  const dbPath = path.join(root, "incremental-index.sqlite");
+  const index = await SqliteImageIndex.open(dbPath);
+  try {
+    const older = createImageRecord({
+      id: "older",
+      filePath: "/tmp/older.png",
+      fileName: "older.png",
+      generatedAt: "2026-05-20T00:00:00.000Z",
+      fileModifiedAt: "2026-05-20T00:00:00.000Z",
+      prompt: "older prompt",
+      sizeBytes: 10
+    });
+    const newer = createImageRecord({
+      id: "newer",
+      filePath: "/tmp/newer.png",
+      fileName: "newer.png",
+      generatedAt: "2026-05-21T00:00:00.000Z",
+      fileModifiedAt: "2026-05-21T00:00:00.000Z",
+      prompt: "newer prompt",
+      sizeBytes: 20
+    });
+
+    index.syncRecords([older, newer]);
+    const initialSearch = index.search({ limit: 20 });
+    assert.equal(initialSearch.total, 2);
+    assert.equal(initialSearch.items[0]?.id, "newer");
+    assert.equal(initialSearch.facets.totalImages, 2);
+
+    const updatedOlder = {
+      ...older,
+      threadName: "Updated title",
+      prompt: "updated prompt",
+      hasPrompt: true,
+      fileModifiedAt: "2026-05-22T00:00:00.000Z",
+      sizeBytes: 11
+    };
+    index.syncRecords([updatedOlder]);
+
+    const updatedSearch = index.search({ query: "updated", limit: 20 });
+    assert.equal(index.count(), 1);
+    assert.equal(updatedSearch.total, 1);
+    assert.equal(updatedSearch.items[0]?.id, "older");
+    assert.equal(index.getById("newer"), null);
+    assert.equal(updatedSearch.facets.totalImages, 1);
   } finally {
     index.close();
   }
@@ -513,6 +616,7 @@ function testSearchUiRendering(): void {
   assert.match(openOverlay, /aria-modal="true"/);
   assert.match(openOverlay, /value="Apple"/);
   assert.match(openOverlay, /class="search-result-item"/);
+  assert.match(openOverlay, /\/api\/images\/image-a\/thumb/);
   assert.match(openOverlay, /制作 Apple 3D 海报/);
   assert.match(openOverlay, />title</);
 
@@ -658,6 +762,23 @@ function testCapabilityViewModel(): void {
   assert.equal(getCapabilityMenuCount(graph.summary, "issues"), 1);
   assert.equal(getSelectedCapability(graph.items, null)?.name, "imagegen");
   assert.equal(getSelectedCapability(graph.items, "plugin-browser")?.name, "Browser");
+}
+
+function testImagePaginationModel(): void {
+  const a = createImageRecord({ id: "a", filePath: "/tmp/a.png" });
+  const b = createImageRecord({ id: "b", filePath: "/tmp/b.png" });
+  const updatedA = createImageRecord({ id: "a", filePath: "/tmp/a.png", threadName: "updated" });
+
+  assert.deepEqual(
+    mergeImagePages([a], [b, updatedA], 2).map((image) => [image.id, image.threadName]),
+    [
+      ["a", "updated"],
+      ["b", b.threadName]
+    ]
+  );
+  assert.equal(canLoadNextImagePage({ loading: false, loadingMore: false, nextOffset: 120, total: 240 }), true);
+  assert.equal(canLoadNextImagePage({ loading: true, loadingMore: false, nextOffset: 120, total: 240 }), false);
+  assert.equal(canLoadNextImagePage({ loading: false, loadingMore: false, nextOffset: 240, total: 240 }), false);
 }
 
 function testSidebarResizeModel(): void {
@@ -828,24 +949,33 @@ function testGalleryViewRendering(): void {
 
   const detailedMarkup = renderToStaticMarkup(
     createElement(GalleryPane, {
+      canLoadMore: false,
       images: [image],
       loading: false,
+      loadingMore: false,
       metaVisible: true,
       selectedId: image.id,
+      total: 1,
       viewMode: "grid",
+      onLoadMore: noop,
       onSelect: noop
     })
   );
   assert.match(detailedMarkup, /class="tile-meta"/);
+  assert.match(detailedMarkup, /\/api\/images\/image-a\/thumb/);
   assert.equal(detailedMarkup.includes("tile-check"), false);
 
   const cleanMarkup = renderToStaticMarkup(
     createElement(GalleryPane, {
+      canLoadMore: false,
       images: [image],
       loading: false,
+      loadingMore: false,
       metaVisible: false,
       selectedId: image.id,
+      total: 1,
       viewMode: "grid",
+      onLoadMore: noop,
       onSelect: noop
     })
   );
@@ -854,16 +984,21 @@ function testGalleryViewRendering(): void {
 
   const listMarkup = renderToStaticMarkup(
     createElement(GalleryPane, {
+      canLoadMore: false,
       images: [image],
       loading: false,
+      loadingMore: false,
       metaVisible: false,
       selectedId: image.id,
+      total: 1,
       viewMode: "list",
+      onLoadMore: noop,
       onSelect: noop
     })
   );
   assert.match(listMarkup, /class="gallery-list"/);
   assert.match(listMarkup, /class="image-list-row selected"/);
+  assert.match(listMarkup, /\/api\/images\/image-a\/thumb/);
   assert.match(listMarkup, /Prompt/);
 }
 
@@ -952,6 +1087,22 @@ async function testImageClipboardModel(): Promise<void> {
       }),
     /Image clipboard is not available/
   );
+}
+
+function testThumbnailCacheModel(root: string): void {
+  const cacheDir = path.join(root, "thumbnail-cache");
+  const image = createImageRecord({
+    id: "abcdef123456",
+    fileModifiedAt: "2026-05-21T11:46:07.558Z",
+    sizeBytes: 68
+  });
+  const firstPath = getThumbnailCachePath(cacheDir, image);
+  const samePath = getThumbnailCachePath(cacheDir, { ...image });
+  const changedPath = getThumbnailCachePath(cacheDir, { ...image, sizeBytes: 69 });
+
+  assert.equal(firstPath, samePath);
+  assert.notEqual(firstPath, changedPath);
+  assert.match(firstPath, /thumbnail-cache\/ab\/abcdef123456-[0-9a-f]{16}\.png$/);
 }
 
 function testCapabilityViewRendering(): void {
@@ -1180,12 +1331,15 @@ async function testDesktopNativeClipboardEndpoint(root: string): Promise<void> {
   const sessionsDir = path.join(codexRoot, "sessions");
   const databasePath = path.join(root, "native-clipboard.sqlite");
   const imagePath = path.join(imageDir, "ig_native_clipboard.png");
+  const thumbnailPath = path.join(root, "native-thumb.png");
   const copiedPaths: string[] = [];
+  const thumbIds: string[] = [];
   const port = await findAvailablePort(48_980);
 
   await fs.mkdir(imageDir, { recursive: true });
   await fs.mkdir(sessionsDir, { recursive: true });
   await fs.writeFile(imagePath, Buffer.from(PNG_1X1, "base64"));
+  await fs.writeFile(thumbnailPath, Buffer.from(PNG_1X1, "base64"));
 
   const runtime = await startCoMateRuntime({
     codexPaths: {
@@ -1206,6 +1360,12 @@ async function testDesktopNativeClipboardEndpoint(root: string): Promise<void> {
         } satisfies ImageCopyResult;
       }
     },
+    thumbnails: {
+      getThumbnail: async (image) => {
+        thumbIds.push(image.id);
+        return { filePath: thumbnailPath, mimeType: "image/png" };
+      }
+    },
     port,
     staticDir: null
   });
@@ -1217,6 +1377,13 @@ async function testDesktopNativeClipboardEndpoint(root: string): Promise<void> {
     assert.equal(images.total, 1);
 
     const image = images.items[0]!;
+    const thumbnailResponse = await fetch(`${runtime.url}/api/images/${encodeURIComponent(image.id)}/thumb`);
+    const thumbnailBytes = Buffer.from(await thumbnailResponse.arrayBuffer());
+    assert.equal(thumbnailResponse.ok, true);
+    assert.equal(thumbnailResponse.headers.get("content-type"), "image/png");
+    assert.equal(thumbnailBytes.length, Buffer.from(PNG_1X1, "base64").length);
+    assert.deepEqual(thumbIds, [image.id]);
+
     const copyResponse = await fetch(`${runtime.url}/api/images/${encodeURIComponent(image.id)}/copy`, {
       method: "POST"
     });

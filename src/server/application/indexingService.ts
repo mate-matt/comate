@@ -1,4 +1,4 @@
-import type { RuntimeStatus, CodexDesktopStatus, IndexingStatus, ReindexResult } from "../../shared/types.js";
+import type { RuntimeStatus, CodexDesktopStatus, IndexingProgress, IndexingStatus, ReindexResult } from "../../shared/types.js";
 import type { LibraryService } from "./libraryService.js";
 
 type CodexDesktopStatusReader = () => Promise<CodexDesktopStatus>;
@@ -11,7 +11,8 @@ export class IndexingService {
     indexed: 0,
     scannedAt: null,
     durationMs: null,
-    error: null
+    error: null,
+    progress: createProgress("idle", 0, 0)
   };
 
   constructor(
@@ -40,7 +41,7 @@ export class IndexingService {
 
     return {
       codexDesktop,
-      indexing: { ...this.indexingStatus },
+      indexing: { ...this.indexingStatus, progress: { ...this.indexingStatus.progress } },
       localOnly: true,
       targetApp: "Codex Desktop"
     };
@@ -57,14 +58,18 @@ export class IndexingService {
 
     this.indexingStatus.state = "indexing";
     this.indexingStatus.error = null;
+    this.indexingStatus.progress = createProgress("scanning", 0, 0);
 
     try {
-      const result = await this.library.rebuildIndex();
+      const result = await this.library.rebuildIndex((progress) => {
+        this.indexingStatus.progress = { ...progress };
+      });
       this.setReady(result);
       return result;
     } catch (error) {
       this.indexingStatus.state = "error";
       this.indexingStatus.error = error instanceof Error ? error.message : "Indexing failed.";
+      this.indexingStatus.progress = createProgress("idle", 0, 0);
       throw error;
     }
   }
@@ -80,6 +85,7 @@ export class IndexingService {
     this.indexingStatus.scannedAt = result.scannedAt;
     this.indexingStatus.durationMs = result.durationMs;
     this.indexingStatus.error = null;
+    this.indexingStatus.progress = createProgress("ready", result.indexed, result.indexed);
   }
 }
 
@@ -89,4 +95,8 @@ function createZeroReindexResult(): ReindexResult {
     scannedAt: new Date().toISOString(),
     durationMs: 0
   };
+}
+
+function createProgress(phase: IndexingProgress["phase"], processed: number, total: number): IndexingProgress {
+  return { phase, processed, total };
 }

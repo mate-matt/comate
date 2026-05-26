@@ -166,6 +166,23 @@ button:disabled {
   font-weight: 650;
 }
 
+.startup-progress {
+  width: min(360px, 100%);
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(189, 208, 220, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(82, 112, 138, 0.12);
+}
+
+.startup-progress span {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: #3f82f7;
+  transition: width 180ms ease;
+}
+
 .startup-panel small {
   max-width: 100%;
   overflow-wrap: anywhere;
@@ -1551,6 +1568,8 @@ button:disabled {
   display: grid;
   gap: 10px;
   min-width: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: 260px;
   padding: 7px;
   border: 1px solid rgba(82, 112, 138, 0.12);
   border-radius: 14px;
@@ -1685,6 +1704,8 @@ button:disabled {
   grid-template-columns: 74px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 14px;
+  content-visibility: auto;
+  contain-intrinsic-size: 86px;
   padding: 9px 12px 9px 9px;
   border: 1px solid rgba(82, 112, 138, 0.14);
   border-radius: 16px;
@@ -1794,6 +1815,15 @@ button:disabled {
 .list-row-prompt.has-prompt {
   background: rgba(223, 235, 224, 0.58);
   color: #4c664b;
+}
+
+.gallery-load-more {
+  grid-column: 1 / -1;
+  min-height: 42px;
+  display: grid;
+  place-items: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
 }
 
 .detail-panel {

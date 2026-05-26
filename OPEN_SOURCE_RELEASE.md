@@ -16,7 +16,7 @@ CoMate is a local companion app for the Codex desktop app, not Codex CLI. It sca
 
 ## Repository Hygiene
 
-- `node_modules/`, `dist-*`, `release/`, `.env*`, `.comate*`, logs, and coverage are ignored.
+- `node_modules/`, `dist-*`, `release/`, `output/`, `.env*`, `.comate*`, `.codex*`, local databases, logs, and coverage are ignored.
 - MIT license is included.
 - Contribution and security guidelines are included.
 - GitHub Actions run tests and production builds on pull requests and pushes.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import type {
   CapabilityRecord,
@@ -30,6 +30,11 @@ import { StartupScreen, type StartupScreenMode } from "./components/StartupScree
 import { WorkspaceBar } from "./components/WorkspaceBar.js";
 import { getSidebarWidthCssValue, SIDEBAR_WIDTH_CONFIG } from "./domain/sidebarResize.js";
 import { filterCapabilities, getSelectedCapability } from "./domain/capabilityView.js";
+import {
+  canLoadNextImagePage,
+  IMAGE_PAGE_SIZE,
+  mergeImagePages
+} from "./domain/imagePagination.js";
 import {
   copyImageBinaryToClipboard,
   getImageClipboardRuntime,
@@ -83,8 +88,19 @@ export function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextImageOffset, setNextImageOffset] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const imageQueryKey = useMemo(
+    () => JSON.stringify({ datePreset, promptState, query: debouncedQuery, sessionId }),
+    [datePreset, debouncedQuery, promptState, sessionId]
+  );
+  const imageQueryKeyRef = useRef(imageQueryKey);
+
+  useEffect(() => {
+    imageQueryKeyRef.current = imageQueryKey;
+  }, [imageQueryKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,14 +182,18 @@ export function App() {
   useEffect(() => {
     if (!isLibraryReady(runtimeStatus)) {
       setLoading(runtimeStatus?.indexing.state === "indexing");
+      setLoadingMore(false);
       setResult(EMPTY_RESULT);
       setSelectedId(null);
+      setNextImageOffset(0);
       return;
     }
 
     const controller = new AbortController();
     setLoading(true);
+    setLoadingMore(false);
     setError(null);
+    setNextImageOffset(0);
 
     fetchImages(
       {
@@ -181,12 +201,14 @@ export function App() {
         datePreset,
         promptState,
         sessionId,
-        limit: 120
+        limit: IMAGE_PAGE_SIZE,
+        offset: 0
       },
       controller.signal
     )
       .then((nextResult) => {
         setResult(nextResult);
+        setNextImageOffset(nextResult.items.length);
         setSelectedId((current) => {
           if (current && nextResult.items.some((image) => image.id === current)) {
             return current;
@@ -212,6 +234,12 @@ export function App() {
     () => result.items.find((image) => image.id === selectedId) ?? null,
     [result.items, selectedId]
   );
+  useEffect(() => {
+    if (!selectedId || result.items.some((image) => image.id === selectedId)) {
+      return;
+    }
+    setSelectedId(result.items[0]?.id ?? null);
+  }, [result.items, selectedId]);
   const handleCopySelectedImage = useCallback(async (): Promise<void> => {
     if (!selectedImage) {
       return;
@@ -304,6 +332,7 @@ export function App() {
   async function handleRefresh(): Promise<void> {
     setRefreshing(true);
     setError(null);
+    setLoadingMore(false);
     try {
       await reindexLibrary();
       const nextStatus = await fetchRuntimeStatus();
@@ -313,9 +342,11 @@ export function App() {
         datePreset,
         promptState,
         sessionId,
-        limit: 120
+        limit: IMAGE_PAGE_SIZE,
+        offset: 0
       });
       setResult(nextResult);
+      setNextImageOffset(nextResult.items.length);
       setSelectedId((current) => current ?? nextResult.items[0]?.id ?? null);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Refresh failed.");
@@ -323,6 +354,62 @@ export function App() {
       setRefreshing(false);
     }
   }
+
+  const canLoadMoreImages = canLoadNextImagePage({
+    loading,
+    loadingMore,
+    nextOffset: nextImageOffset,
+    total: result.total
+  });
+
+  const handleLoadMoreImages = useCallback(async (): Promise<void> => {
+    if (
+      !canLoadNextImagePage({
+        loading,
+        loadingMore,
+        nextOffset: nextImageOffset,
+        total: result.total
+      })
+    ) {
+      return;
+    }
+
+    const requestKey = imageQueryKey;
+    const requestOffset = nextImageOffset;
+    setLoadingMore(true);
+    setError(null);
+
+    try {
+      const nextResult = await fetchImages({
+        query: debouncedQuery,
+        datePreset,
+        promptState,
+        sessionId,
+        limit: IMAGE_PAGE_SIZE,
+        offset: requestOffset
+      });
+
+      if (imageQueryKeyRef.current !== requestKey) {
+        return;
+      }
+
+      setResult((current) => ({
+        ...nextResult,
+        items: mergeImagePages(current.items, nextResult.items)
+      }));
+      setNextImageOffset((current) =>
+        Math.max(current, nextResult.items.length === 0 ? nextResult.total : requestOffset + nextResult.items.length)
+      );
+    } catch (nextError) {
+      if (imageQueryKeyRef.current === requestKey) {
+        setError(nextError instanceof Error ? nextError.message : "Unable to load more images.");
+      }
+    } finally {
+      if (imageQueryKeyRef.current === requestKey) {
+        setLoadingMore(false);
+      }
+    }
+  }, [datePreset, debouncedQuery, imageQueryKey, loading, loadingMore, nextImageOffset, promptState, result.total, sessionId]);
 
   async function handleCapabilityRescan(): Promise<void> {
     setCapabilityRefreshing(true);
@@ -434,11 +521,15 @@ export function App() {
           />
           {activeModule === "gallery" ? (
             <GalleryPane
+              canLoadMore={canLoadMoreImages}
               images={result.items}
               loading={loading}
+              loadingMore={loadingMore}
               metaVisible={galleryMetaVisible}
               selectedId={selectedId}
+              total={result.total}
               viewMode={galleryViewMode}
+              onLoadMore={handleLoadMoreImages}
               onSelect={selectImage}
             />
           ) : (

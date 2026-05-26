@@ -4,10 +4,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { URL } from "node:url";
 
 import type { DatePreset, ImageSearchParams, PromptState } from "../../shared/types.js";
-import type { CodexPaths, ImageClipboardService, ImageIndexStore } from "../domain/types.js";
+import type { CodexPaths, ImageClipboardService, ImageIndexStore, ImageThumbnailService } from "../domain/types.js";
 import type { IndexingService } from "../application/indexingService.js";
 import type { CodexCapabilityScanner } from "../infrastructure/codexCapabilityScanner.js";
 import { FileLauncher, type FileLaunchAction } from "../infrastructure/fileLauncher.js";
+import { getImageContentType } from "../infrastructure/imageThumbnailService.js";
 import { parseInteger, readJsonBody, sendError, sendJson } from "./httpUtils.js";
 import { serveStaticFile } from "./staticAssets.js";
 
@@ -19,6 +20,7 @@ interface CreateServerOptions {
   indexing: IndexingService;
   launcher: FileLauncher;
   staticDir: string | null;
+  thumbnails: ImageThumbnailService;
 }
 
 interface OpenBody {
@@ -131,6 +133,12 @@ async function handleApiRequest(
     return;
   }
 
+  const imageThumbMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/thumb$/);
+  if (request.method === "GET" && imageThumbMatch) {
+    await sendImageThumbnail(options.index, options.thumbnails, decodeURIComponent(imageThumbMatch[1]!), response);
+    return;
+  }
+
   const imageOpenMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/open$/);
   if (request.method === "POST" && imageOpenMatch) {
     const body = await readJsonBody<OpenBody>(request);
@@ -222,15 +230,36 @@ async function sendImageFile(index: ImageIndexStore, id: string, response: Serve
   fs.createReadStream(record.filePath).pipe(response);
 }
 
-function getImageContentType(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".jpg" || ext === ".jpeg") {
-    return "image/jpeg";
+async function sendImageThumbnail(
+  index: ImageIndexStore,
+  thumbnails: ImageThumbnailService,
+  id: string,
+  response: ServerResponse
+): Promise<void> {
+  const record = index.getById(id);
+  if (!record) {
+    sendError(response, 404, "Image not found.");
+    return;
   }
-  if (ext === ".webp") {
-    return "image/webp";
+
+  if (!fs.existsSync(record.filePath)) {
+    sendError(response, 404, "Image file is missing.");
+    return;
   }
-  return "image/png";
+
+  const thumbnail = await thumbnails.getThumbnail(record);
+  if (!fs.existsSync(thumbnail.filePath)) {
+    sendError(response, 404, "Image thumbnail is missing.");
+    return;
+  }
+
+  const stat = await fs.promises.stat(thumbnail.filePath);
+  response.writeHead(200, {
+    "content-type": thumbnail.mimeType,
+    "content-length": stat.size,
+    "cache-control": "private, max-age=31536000, immutable"
+  });
+  fs.createReadStream(thumbnail.filePath).pipe(response);
 }
 
 function readEnum<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {

@@ -2,7 +2,7 @@ import { Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { ImageRecord } from "../../shared/types.js";
-import { imageFileUrl } from "../api/client.js";
+import { imageThumbnailUrl } from "../api/client.js";
 import { formatDate, middleEllipsis } from "../utils/format.js";
 
 interface SearchOverlayProps {
@@ -134,7 +134,7 @@ export function SearchOverlay({
               onMouseEnter={() => setActiveIndex(index)}
             >
               <span className="search-result-thumb">
-                <img src={imageFileUrl(image)} alt={image.threadName ?? image.fileName} />
+                <img src={imageThumbnailUrl(image)} alt={image.threadName ?? image.fileName} loading="lazy" decoding="async" />
               </span>
               <span className="search-result-copy">
                 <strong>{image.threadName ?? "Untitled"}</strong>

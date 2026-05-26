@@ -12,7 +12,8 @@ export function resolveCodexPaths(overrides: Partial<CodexPaths> = {}): CodexPat
     generatedImagesDir: overrides.generatedImagesDir ?? path.join(codexRoot, "generated_images"),
     sessionIndexPath: overrides.sessionIndexPath ?? path.join(codexRoot, "session_index.jsonl"),
     sessionsDir: overrides.sessionsDir ?? path.join(codexRoot, "sessions"),
-    databasePath: overrides.databasePath ?? process.env.COMATE_DB ?? path.join(appDataDir, "comate.sqlite")
+    databasePath: overrides.databasePath ?? process.env.COMATE_DB ?? path.join(appDataDir, "comate.sqlite"),
+    thumbnailCacheDir: overrides.thumbnailCacheDir ?? process.env.COMATE_THUMBNAILS ?? path.join(appDataDir, "thumbnails")
   };
 }
 

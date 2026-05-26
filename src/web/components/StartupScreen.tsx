@@ -14,6 +14,10 @@ interface StartupScreenProps {
 export function StartupScreen({ mode, status, error, onRetry }: StartupScreenProps) {
   const content = getStartupContent(mode, status, error);
   const retryVisible = mode === "missingCodex" || mode === "error";
+  const progress = status?.indexing.progress ?? null;
+  const progressVisible = Boolean((mode === "indexing" || mode === "starting") && progress && progress.total > 0);
+  const progressPercent =
+    progressVisible && progress ? Math.max(0, Math.min(100, Math.round((progress.processed / progress.total) * 100))) : 0;
 
   return (
     <main className="startup-screen">
@@ -24,6 +28,11 @@ export function StartupScreen({ mode, status, error, onRetry }: StartupScreenPro
         <p className="startup-kicker">Codex Desktop Companion</p>
         <h1>{content.title}</h1>
         <p>{content.body}</p>
+        {progressVisible ? (
+          <div className="startup-progress" aria-label="Indexing progress" aria-valuemax={100} aria-valuemin={0} aria-valuenow={progressPercent} role="progressbar">
+            <span style={{ width: `${progressPercent}%` }} />
+          </div>
+        ) : null}
         <div className="startup-local-note">
           <ShieldCheck size={15} />
           <span>Completely local. No network connection is used for your library.</span>
@@ -64,10 +73,17 @@ function getStartupContent(
   }
 
   if (mode === "indexing") {
+    const progress = status?.indexing.progress;
+    const progressDetail =
+      progress && progress.total > 0
+        ? `${formatProgressPhase(progress.phase)} ${progress.processed} of ${progress.total} images.`
+        : status?.indexing.indexed
+          ? `${status.indexing.indexed} images indexed so far.`
+          : null;
     return {
       title: "Building your local image library",
       body: "CoMate is scanning Codex Desktop images and linking them with session prompts.",
-      detail: status?.indexing.indexed ? `${status.indexing.indexed} images indexed so far.` : null
+      detail: progressDetail
     };
   }
 
@@ -76,4 +92,17 @@ function getStartupContent(
     body: "Preparing the private local gallery for Codex Desktop images.",
     detail: null
   };
+}
+
+function formatProgressPhase(phase: RuntimeStatus["indexing"]["progress"]["phase"]): string {
+  if (phase === "linking") {
+    return "Linking prompts";
+  }
+  if (phase === "writing") {
+    return "Writing index";
+  }
+  if (phase === "ready") {
+    return "Ready";
+  }
+  return "Scanning";
 }

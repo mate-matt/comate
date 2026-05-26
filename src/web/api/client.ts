@@ -77,6 +77,10 @@ export function imageFileUrl(record: ImageRecord): string {
   return `/api/images/${encodeURIComponent(record.id)}/file?v=${encodeURIComponent(record.fileModifiedAt)}`;
 }
 
+export function imageThumbnailUrl(record: ImageRecord): string {
+  return `/api/images/${encodeURIComponent(record.id)}/thumb?v=${encodeURIComponent(record.fileModifiedAt)}&s=${record.sizeBytes}`;
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   const value = await response.json();
   if (!response.ok) {

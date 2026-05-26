@@ -59,6 +59,14 @@ export interface ReindexResult {
   durationMs: number;
 }
 
+export type IndexingProgressPhase = "idle" | "scanning" | "linking" | "writing" | "ready";
+
+export interface IndexingProgress {
+  phase: IndexingProgressPhase;
+  processed: number;
+  total: number;
+}
+
 export type CodexDesktopDataPath = "codexRoot" | "generatedImagesDir" | "sessionIndexPath" | "sessionsDir";
 
 export interface CodexDesktopStatus {
@@ -79,6 +87,7 @@ export interface IndexingStatus {
   scannedAt: string | null;
   durationMs: number | null;
   error: string | null;
+  progress: IndexingProgress;
 }
 
 export interface RuntimeStatus {

@@ -13,6 +13,7 @@ interface ImageRow {
   thread_name: string | null;
   generated_at: string | null;
   file_modified_at: string;
+  sort_at: string;
   prompt: string | null;
   width: number | null;
   height: number | null;
@@ -24,6 +25,7 @@ interface ImageRow {
 
 export class SqliteImageIndex implements ImageIndexStore {
   private readonly db: DatabaseSync;
+  private facetsCache: ImageSearchResult["facets"] | null = null;
 
   private constructor(databasePath: string) {
     this.db = new DatabaseSync(databasePath);
@@ -40,10 +42,10 @@ export class SqliteImageIndex implements ImageIndexStore {
   replaceAll(records: ImageRecord[]): void {
     const insertImage = this.db.prepare(`
       INSERT INTO images (
-        id, file_path, file_name, session_id, thread_name, generated_at, file_modified_at,
+        id, file_path, file_name, session_id, thread_name, generated_at, file_modified_at, sort_at,
         prompt, width, height, size_bytes, call_id, session_path, has_prompt
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertSearch = this.db.prepare(`
@@ -65,6 +67,7 @@ export class SqliteImageIndex implements ImageIndexStore {
           record.threadName,
           record.generatedAt,
           record.fileModifiedAt,
+          getSortAt(record),
           record.prompt,
           record.width,
           record.height,
@@ -84,6 +87,91 @@ export class SqliteImageIndex implements ImageIndexStore {
       }
 
       this.db.exec("COMMIT");
+      this.facetsCache = null;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  syncRecords(records: ImageRecord[]): void {
+    const upsertImage = this.db.prepare(`
+      INSERT INTO images (
+        id, file_path, file_name, session_id, thread_name, generated_at, file_modified_at, sort_at,
+        prompt, width, height, size_bytes, call_id, session_path, has_prompt
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        file_path = excluded.file_path,
+        file_name = excluded.file_name,
+        session_id = excluded.session_id,
+        thread_name = excluded.thread_name,
+        generated_at = excluded.generated_at,
+        file_modified_at = excluded.file_modified_at,
+        sort_at = excluded.sort_at,
+        prompt = excluded.prompt,
+        width = excluded.width,
+        height = excluded.height,
+        size_bytes = excluded.size_bytes,
+        call_id = excluded.call_id,
+        session_path = excluded.session_path,
+        has_prompt = excluded.has_prompt
+      WHERE
+        images.file_path IS NOT excluded.file_path OR
+        images.file_name IS NOT excluded.file_name OR
+        images.session_id IS NOT excluded.session_id OR
+        images.thread_name IS NOT excluded.thread_name OR
+        images.generated_at IS NOT excluded.generated_at OR
+        images.file_modified_at IS NOT excluded.file_modified_at OR
+        images.sort_at IS NOT excluded.sort_at OR
+        images.prompt IS NOT excluded.prompt OR
+        images.width IS NOT excluded.width OR
+        images.height IS NOT excluded.height OR
+        images.size_bytes IS NOT excluded.size_bytes OR
+        images.call_id IS NOT excluded.call_id OR
+        images.session_path IS NOT excluded.session_path OR
+        images.has_prompt IS NOT excluded.has_prompt
+    `);
+
+    const deleteSearch = this.db.prepare("DELETE FROM image_search WHERE id = ?");
+    const insertSearch = this.db.prepare(`
+      INSERT INTO image_search (id, file_name, thread_name, prompt, generated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec("CREATE TEMP TABLE IF NOT EXISTS next_image_ids (id TEXT PRIMARY KEY)");
+      this.db.exec("DELETE FROM next_image_ids");
+      const insertNextId = this.db.prepare("INSERT INTO next_image_ids (id) VALUES (?)");
+
+      for (const record of records) {
+        const sortAt = getSortAt(record);
+        upsertImage.run(
+          record.id,
+          record.filePath,
+          record.fileName,
+          record.sessionId,
+          record.threadName,
+          record.generatedAt,
+          record.fileModifiedAt,
+          sortAt,
+          record.prompt,
+          record.width,
+          record.height,
+          record.sizeBytes,
+          record.callId,
+          record.sessionPath,
+          record.hasPrompt ? 1 : 0
+        );
+        deleteSearch.run(record.id);
+        insertSearch.run(record.id, record.fileName, record.threadName ?? "", record.prompt ?? "", record.generatedAt ?? "");
+        insertNextId.run(record.id);
+      }
+
+      this.db.exec("DELETE FROM image_search WHERE id NOT IN (SELECT id FROM next_image_ids)");
+      this.db.exec("DELETE FROM images WHERE id NOT IN (SELECT id FROM next_image_ids)");
+      this.db.exec("COMMIT");
+      this.facetsCache = null;
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -129,7 +217,7 @@ export class SqliteImageIndex implements ImageIndexStore {
 
     const threshold = getDateThreshold(params.datePreset ?? "all");
     if (threshold) {
-      where.push("datetime(COALESCE(generated_at, file_modified_at)) >= datetime(?)");
+      where.push("datetime(sort_at) >= datetime(?)");
       values.push(threshold);
     }
 
@@ -139,7 +227,7 @@ export class SqliteImageIndex implements ImageIndexStore {
         `
         SELECT * FROM images
         ${whereSql}
-        ORDER BY datetime(COALESCE(generated_at, file_modified_at)) DESC, file_name ASC
+        ORDER BY sort_at DESC, file_name ASC
         LIMIT ? OFFSET ?
       `
       )
@@ -157,6 +245,11 @@ export class SqliteImageIndex implements ImageIndexStore {
   getById(id: string): ImageRecord | null {
     const row = this.db.prepare("SELECT * FROM images WHERE id = ?").get(id) as ImageRow | undefined;
     return row ? rowToImageRecord(row) : null;
+  }
+
+  listAll(): ImageRecord[] {
+    const rows = this.db.prepare("SELECT * FROM images").all() as unknown as ImageRow[];
+    return rows.map(rowToImageRecord);
   }
 
   count(): number {
@@ -178,6 +271,7 @@ export class SqliteImageIndex implements ImageIndexStore {
         thread_name TEXT,
         generated_at TEXT,
         file_modified_at TEXT NOT NULL,
+        sort_at TEXT NOT NULL,
         prompt TEXT,
         width INTEGER,
         height INTEGER,
@@ -194,6 +288,13 @@ export class SqliteImageIndex implements ImageIndexStore {
         prompt,
         generated_at
       );
+    `);
+    this.migrateSchema();
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_images_sort ON images(sort_at DESC, file_name ASC);
+      CREATE INDEX IF NOT EXISTS idx_images_session_sort ON images(session_id, sort_at DESC, file_name ASC);
+      CREATE INDEX IF NOT EXISTS idx_images_prompt_sort ON images(has_prompt, sort_at DESC, file_name ASC);
+      CREATE INDEX IF NOT EXISTS idx_images_session_prompt_sort ON images(session_id, has_prompt, sort_at DESC, file_name ASC);
     `);
   }
 
@@ -214,6 +315,10 @@ export class SqliteImageIndex implements ImageIndexStore {
   }
 
   private readFacets(): ImageSearchResult["facets"] {
+    if (this.facetsCache) {
+      return this.facetsCache;
+    }
+
     const sessionRows = this.db
       .prepare(
         `
@@ -231,9 +336,9 @@ export class SqliteImageIndex implements ImageIndexStore {
         `
         SELECT
           COUNT(*) as totalImages,
-          SUM(CASE WHEN datetime(COALESCE(generated_at, file_modified_at)) >= datetime(?) THEN 1 ELSE 0 END) as today,
-          SUM(CASE WHEN datetime(COALESCE(generated_at, file_modified_at)) >= datetime(?) THEN 1 ELSE 0 END) as last7Days,
-          SUM(CASE WHEN datetime(COALESCE(generated_at, file_modified_at)) >= datetime(?) THEN 1 ELSE 0 END) as last30Days,
+          SUM(CASE WHEN datetime(sort_at) >= datetime(?) THEN 1 ELSE 0 END) as today,
+          SUM(CASE WHEN datetime(sort_at) >= datetime(?) THEN 1 ELSE 0 END) as last7Days,
+          SUM(CASE WHEN datetime(sort_at) >= datetime(?) THEN 1 ELSE 0 END) as last30Days,
           SUM(CASE WHEN has_prompt = 1 THEN 1 ELSE 0 END) as withPrompt,
           SUM(CASE WHEN has_prompt = 0 THEN 1 ELSE 0 END) as withoutPrompt
         FROM images
@@ -248,7 +353,7 @@ export class SqliteImageIndex implements ImageIndexStore {
       withoutPrompt: number | null;
     };
 
-    return {
+    this.facetsCache = {
       sessions: sessionRows.map(
         (row): SessionFacet => ({
           sessionId: row.session_id,
@@ -263,6 +368,16 @@ export class SqliteImageIndex implements ImageIndexStore {
       withPrompt: counts.withPrompt ?? 0,
       withoutPrompt: counts.withoutPrompt ?? 0
     };
+    return this.facetsCache;
+  }
+
+  private migrateSchema(): void {
+    const columns = this.db.prepare("PRAGMA table_info(images)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "sort_at")) {
+      this.db.exec("ALTER TABLE images ADD COLUMN sort_at TEXT");
+      this.db.exec("UPDATE images SET sort_at = COALESCE(generated_at, file_modified_at)");
+    }
+    this.db.exec("UPDATE images SET sort_at = COALESCE(generated_at, file_modified_at) WHERE sort_at IS NULL OR sort_at = ''");
   }
 }
 
@@ -283,6 +398,10 @@ function rowToImageRecord(row: ImageRow): ImageRecord {
     sessionPath: row.session_path,
     hasPrompt: row.has_prompt === 1
   };
+}
+
+function getSortAt(record: Pick<ImageRecord, "generatedAt" | "fileModifiedAt">): string {
+  return record.generatedAt ?? record.fileModifiedAt;
 }
 
 function escapeLike(value: string): string {

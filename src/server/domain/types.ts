@@ -1,4 +1,4 @@
-import type { ImageCopyResult, ImageRecord } from "../../shared/types.js";
+import type { ImageCopyResult, ImageRecord, IndexingProgress } from "../../shared/types.js";
 
 export interface CodexPaths {
   codexRoot: string;
@@ -6,6 +6,7 @@ export interface CodexPaths {
   sessionIndexPath: string;
   sessionsDir: string;
   databasePath: string;
+  thumbnailCacheDir: string;
 }
 
 export interface ScannedImage {
@@ -18,6 +19,17 @@ export interface ScannedImage {
   height: number | null;
   callId: string | null;
 }
+
+export interface ScannedImageFile {
+  filePath: string;
+  fileName: string;
+  sessionId: string;
+  fileModifiedAt: string;
+  sizeBytes: number;
+  callId: string | null;
+}
+
+export type IndexingProgressReporter = (progress: IndexingProgress) => void;
 
 export interface SessionSummary {
   id: string;
@@ -40,12 +52,23 @@ export interface SessionLogInfo {
 
 export interface ImageIndexStore {
   replaceAll(records: ImageRecord[]): void;
+  syncRecords(records: ImageRecord[]): void;
   search(params: import("../../shared/types.js").ImageSearchParams): import("../../shared/types.js").ImageSearchResult;
   getById(id: string): ImageRecord | null;
+  listAll(): ImageRecord[];
   count(): number;
   close(): void;
 }
 
 export interface ImageClipboardService {
   copyImageFile(filePath: string): Promise<ImageCopyResult>;
+}
+
+export interface ImageThumbnail {
+  filePath: string;
+  mimeType: string;
+}
+
+export interface ImageThumbnailService {
+  getThumbnail(record: ImageRecord): Promise<ImageThumbnail>;
 }
