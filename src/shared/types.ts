@@ -1,5 +1,9 @@
 export type DatePreset = "all" | "today" | "week" | "month";
 export type PromptState = "all" | "withPrompt" | "withoutPrompt";
+export type ImagePromptSource = "revised_prompt" | "cached" | "none";
+export type ImageContextRole = "user" | "assistant" | "system" | "tool";
+export type ImageContextSource = "live_log" | "cached";
+export type ImageContextStatus = "available" | "cached" | "unavailable";
 
 export interface ImageRecord {
   id: string;
@@ -10,12 +14,32 @@ export interface ImageRecord {
   generatedAt: string | null;
   fileModifiedAt: string;
   prompt: string | null;
+  promptSource: ImagePromptSource;
+  promptCapturedAt: string | null;
   width: number | null;
   height: number | null;
   sizeBytes: number;
   callId: string | null;
   sessionPath: string | null;
   hasPrompt: boolean;
+}
+
+export interface ImageContextMessage {
+  position: number;
+  role: ImageContextRole;
+  text: string;
+  timestamp: string | null;
+  source: ImageContextSource;
+  capturedAt: string;
+}
+
+export interface ImageContextResult {
+  imageId: string;
+  anchorTimestamp: string | null;
+  status: ImageContextStatus;
+  source: ImageContextSource | null;
+  capturedAt: string | null;
+  messages: ImageContextMessage[];
 }
 
 export interface SessionFacet {

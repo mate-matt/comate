@@ -1,5 +1,6 @@
 import type {
   CapabilityScanResult,
+  ImageContextResult,
   ImageCopyResult,
   ImageRecord,
   ImageSearchParams,
@@ -24,6 +25,11 @@ export async function fetchImages(params: ImageSearchParams, signal?: AbortSigna
 
   const response = await fetch(`/api/images?${query.toString()}`, { signal });
   return readJson<ImageSearchResult>(response);
+}
+
+export async function fetchImageContext(id: string, signal?: AbortSignal): Promise<ImageContextResult> {
+  const response = await fetch(`/api/images/${encodeURIComponent(id)}/context`, { signal });
+  return readJson<ImageContextResult>(response);
 }
 
 export async function reindexLibrary(): Promise<ReindexResult> {

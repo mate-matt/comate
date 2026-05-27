@@ -9,10 +9,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type {
   CapabilityRecord,
   CapabilityScanResult,
+  ImageContextResult,
   ImageCopyResult,
   ImageRecord,
   ImageSearchResult
 } from "../src/shared/types.js";
+import { buildImageContext } from "../src/server/application/imageContextService.js";
 import { LibraryService } from "../src/server/application/libraryService.js";
 import { startCoMateRuntime } from "../src/server/application/serverRuntime.js";
 import { normalizeStaticPath } from "../src/server/api/staticAssets.js";
@@ -75,6 +77,8 @@ async function main(): Promise<void> {
     console.log("ok codex-desktop/detection");
     await testScannerSessionMergeAndIndex(root);
     console.log("ok scanner/session/index");
+    await testSessionTimelineAndContext(root);
+    console.log("ok session/context-model");
     await testSqliteIncrementalIndex(root);
     console.log("ok sqlite/incremental-index");
     await testCapabilityScanner(root);
@@ -339,15 +343,19 @@ async function testScannerSessionMergeAndIndex(root: string): Promise<void> {
   );
   await fs.writeFile(
     sessionLogPath,
-    JSON.stringify({
-      timestamp: "2026-05-21T11:46:07.558Z",
-      payload: {
-        type: "image_generation_end",
-        call_id: callId,
-        saved_path: imagePath,
-        revised_prompt: "Create a clean Apple poster with glass detail."
-      }
-    }) + "\n"
+    [
+      createMessageLine("2026-05-21T11:45:40.000Z", "user", "Make an Apple product poster."),
+      JSON.stringify({
+        timestamp: "2026-05-21T11:46:07.558Z",
+        payload: {
+          type: "image_generation_end",
+          call_id: callId,
+          saved_path: imagePath,
+          revised_prompt: "Create a clean Apple poster with glass detail."
+        }
+      }),
+      createMessageLine("2026-05-21T11:46:30.000Z", "assistant", "The poster image is ready.")
+    ].join("\n")
   );
 
   const scanner = new CodexImageScanner(generatedDir);
@@ -399,9 +407,105 @@ async function testScannerSessionMergeAndIndex(root: string): Promise<void> {
     assert.ok(progressEvents.some((progress) => progress.phase === "scanning" && progress.total === 1));
     assert.ok(progressEvents.some((progress) => progress.phase === "linking" && progress.processed === 1));
     assert.ok(progressEvents.some((progress) => progress.phase === "writing" && progress.processed === 1));
+    const indexedContext = index.getImageContext(records[0]!.id);
+    assert.equal(indexedContext?.status, "available");
+    assert.deepEqual(indexedContext?.messages.map((message) => message.text), [
+      "Make an Apple product poster.",
+      "The poster image is ready."
+    ]);
   } finally {
     index.close();
   }
+}
+
+async function testSessionTimelineAndContext(root: string): Promise<void> {
+  const sessionId = "019e4a58-2295-78d2-ae37-3a8c0f2fa4dc";
+  const sessionsDir = path.join(root, ".codex-context", "sessions");
+  const sessionLogPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+  const imagePath = path.join(root, ".codex-context", "generated_images", sessionId, "ig_context.png");
+  await fs.mkdir(path.dirname(sessionLogPath), { recursive: true });
+  await fs.mkdir(path.dirname(imagePath), { recursive: true });
+
+  await fs.writeFile(
+    sessionLogPath,
+    [
+      createMessageLine("2026-05-21T11:45:00.000Z", "user", "Make the poster calmer."),
+      JSON.stringify({
+        timestamp: "2026-05-21T11:45:10.000Z",
+        payload: {
+          type: "response_item",
+          item: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Use quieter glass and more spacing." }]
+          }
+        }
+      }),
+      createMessageLine("2026-05-21T11:45:20.000Z", "user", "Keep the product visible."),
+      JSON.stringify({
+        timestamp: "2026-05-21T11:46:00.000Z",
+        payload: {
+          type: "image_generation_end",
+          call_id: "ig_context",
+          saved_path: imagePath,
+          revised_prompt: "A calm glass product poster."
+        }
+      }),
+      createMessageLine("2026-05-21T11:46:20.000Z", "assistant", "The first image is ready."),
+      createMessageLine("2026-05-21T11:47:00.000Z", "user", "Make it a bit brighter.")
+    ].join("\n")
+  );
+
+  const sessions = new CodexSessionRepository(path.join(root, "missing-index.jsonl"), sessionsDir);
+  const timeline = await sessions.readSessionTimeline(sessionLogPath);
+  assert.equal(timeline.length, 6);
+  assert.deepEqual(
+    timeline.filter((event) => event.kind === "message").map((event) => event.kind === "message" && [event.role, event.text]),
+    [
+      ["user", "Make the poster calmer."],
+      ["assistant", "Use quieter glass and more spacing."],
+      ["user", "Keep the product visible."],
+      ["assistant", "The first image is ready."],
+      ["user", "Make it a bit brighter."]
+    ]
+  );
+
+  const context = buildImageContext(
+    createImageRecord({
+      id: "image-context",
+      filePath: imagePath,
+      fileName: "ig_context.png",
+      callId: "ig_context",
+      generatedAt: "2026-05-21T11:46:00.000Z"
+    }),
+    timeline,
+    { capturedAt: "2026-05-22T00:00:00.000Z" }
+  );
+
+  assert.equal(context.status, "available");
+  assert.equal(context.source, "live_log");
+  assert.equal(context.anchorTimestamp, "2026-05-21T11:46:00.000Z");
+  assert.deepEqual(
+    context.messages.map((message) => [message.position, message.role, message.text]),
+    [
+      [0, "user", "Make the poster calmer."],
+      [1, "assistant", "Use quieter glass and more spacing."],
+      [2, "user", "Keep the product visible."],
+      [3, "assistant", "The first image is ready."],
+      [4, "user", "Make it a bit brighter."]
+    ]
+  );
+}
+
+function createMessageLine(timestamp: string, role: string, content: unknown): string {
+  return JSON.stringify({
+    timestamp,
+    payload: {
+      type: `${role}_message`,
+      role,
+      content
+    }
+  });
 }
 
 async function testSqliteIncrementalIndex(root: string): Promise<void> {
@@ -428,10 +532,47 @@ async function testSqliteIncrementalIndex(root: string): Promise<void> {
     });
 
     index.syncRecords([older, newer]);
+    index.replaceImageContext({
+      imageId: older.id,
+      anchorTimestamp: older.generatedAt,
+      status: "available",
+      source: "live_log",
+      capturedAt: "2026-05-22T00:00:00.000Z",
+      messages: [
+        {
+          position: 0,
+          role: "user",
+          text: "older context",
+          timestamp: "2026-05-20T00:00:00.000Z",
+          source: "live_log",
+          capturedAt: "2026-05-22T00:00:00.000Z"
+        }
+      ]
+    } satisfies ImageContextResult);
+    index.replaceImageContext({
+      imageId: newer.id,
+      anchorTimestamp: newer.generatedAt,
+      status: "available",
+      source: "live_log",
+      capturedAt: "2026-05-22T00:00:00.000Z",
+      messages: [
+        {
+          position: 0,
+          role: "user",
+          text: "newer context",
+          timestamp: "2026-05-21T00:00:00.000Z",
+          source: "live_log",
+          capturedAt: "2026-05-22T00:00:00.000Z"
+        }
+      ]
+    } satisfies ImageContextResult);
+
     const initialSearch = index.search({ limit: 20 });
     assert.equal(initialSearch.total, 2);
     assert.equal(initialSearch.items[0]?.id, "newer");
+    assert.equal(initialSearch.items[0]?.promptSource, "revised_prompt");
     assert.equal(initialSearch.facets.totalImages, 2);
+    assert.equal(index.getImageContext("older")?.messages[0]?.text, "older context");
 
     const updatedOlder = {
       ...older,
@@ -448,6 +589,8 @@ async function testSqliteIncrementalIndex(root: string): Promise<void> {
     assert.equal(updatedSearch.total, 1);
     assert.equal(updatedSearch.items[0]?.id, "older");
     assert.equal(index.getById("newer"), null);
+    assert.equal(index.getImageContext("newer"), null);
+    assert.equal(index.getImageContext("older")?.messages[0]?.text, "older context");
     assert.equal(updatedSearch.facets.totalImages, 1);
   } finally {
     index.close();
@@ -568,7 +711,7 @@ async function testCapabilityScanner(root: string): Promise<void> {
 
 function testSearchUiRendering(): void {
   const noop = () => undefined;
-  const image = {
+  const image = createImageRecord({
     id: "image-a",
     filePath: "/tmp/image-a.png",
     fileName: "ig_image_a.png",
@@ -577,13 +720,15 @@ function testSearchUiRendering(): void {
     generatedAt: "2026-05-21T11:46:07.558Z",
     fileModifiedAt: "2026-05-21T11:46:07.558Z",
     prompt: "Create a clean Apple poster with glass detail.",
+    promptSource: "revised_prompt",
+    promptCapturedAt: "2026-05-21T11:46:07.558Z",
     width: 1,
     height: 1,
     sizeBytes: 68,
     callId: "ig_image_a",
     sessionPath: "/tmp/session.jsonl",
     hasPrompt: true
-  };
+  });
   const closedOverlay = renderToStaticMarkup(
     createElement(SearchOverlay, {
       images: [],
@@ -687,21 +832,65 @@ function testSearchUiRendering(): void {
   assert.match(railMarkup, /alt="CoMate"/);
   assert.match(railMarkup, /aria-label="图片浏览"/);
 
-  const detailMarkup = renderToStaticMarkup(createElement(DetailPanel, { image, onCopyImage: noop }));
+  const detailContext = {
+    imageId: image.id,
+    anchorTimestamp: image.generatedAt,
+    status: "available",
+    source: "live_log",
+    capturedAt: "2026-05-22T00:00:00.000Z",
+    messages: [
+      {
+        position: 0,
+        role: "user",
+        text: "Make the glass softer.",
+        timestamp: "2026-05-21T11:45:00.000Z",
+        source: "live_log",
+        capturedAt: "2026-05-22T00:00:00.000Z"
+      }
+    ]
+  } satisfies ImageContextResult;
+  const detailMarkup = renderToStaticMarkup(
+    createElement(DetailPanel, { context: detailContext, image, onCopyImage: noop })
+  );
   const promptIndex = detailMarkup.indexOf(">Prompt<");
+  const contextIndex = detailMarkup.indexOf(">Context<");
   const detailsIndex = detailMarkup.indexOf(">Details<");
-  const titleIndex = detailMarkup.indexOf(">Title<");
   assert.ok(promptIndex >= 0);
-  assert.ok(detailsIndex > promptIndex);
-  assert.ok(titleIndex > detailsIndex);
-  assert.match(detailMarkup, /class="detail-section prompt-section"/);
-  assert.match(detailMarkup, /class="detail-section metadata-section"/);
+  assert.ok(contextIndex > promptIndex);
+  assert.ok(detailsIndex > contextIndex);
+  assert.match(detailMarkup, /role="tablist"/);
+  assert.match(detailMarkup, /class="detail-tab active"/);
+  assert.match(detailMarkup, /class="detail-tab-panel detail-tab-panel-prompt"/);
+  assert.match(detailMarkup, /class="prompt-reader"/);
+  assert.match(detailMarkup, /Exact prompt/);
   assert.match(detailMarkup, /aria-label="Copy image"/);
+  assert.match(detailMarkup, /aria-label="Open image"/);
+  assert.match(detailMarkup, /aria-label="Reveal in folder"/);
+  assert.match(detailMarkup, />Copy</);
+  assert.match(detailMarkup, />Open</);
+  assert.match(detailMarkup, />Folder</);
+  assert.equal((detailMarkup.match(/detail-action-button/g) ?? []).length, 3);
   assert.match(detailMarkup, /aria-label="Copy prompt"/);
+  assert.equal(detailMarkup.includes('aria-label="Copy file path"'), false);
+  assert.match(detailMarkup, /制作 Apple 3D 海报/);
+
+  const contextMarkup = renderToStaticMarkup(
+    createElement(DetailPanel, {
+      context: detailContext,
+      image: createImageRecord({ hasPrompt: false, prompt: null, promptCapturedAt: null, promptSource: "none" }),
+      onCopyImage: noop
+    })
+  );
+  assert.match(contextMarkup, /class="detail-tab-panel detail-tab-panel-context"/);
+  assert.match(contextMarkup, /Local session log/);
+  assert.match(contextMarkup, /Before/);
+  assert.match(contextMarkup, /Image generated here/);
+  assert.match(contextMarkup, /Make the glass softer/);
+  assert.match(contextMarkup, /aria-label="Copy context"/);
 }
 
 function testWorkspaceLayoutModel(): void {
-  const image = {
+  const image = createImageRecord({
     id: "image-a",
     filePath: "/tmp/image-a.png",
     fileName: "ig_image_a.png",
@@ -716,7 +905,7 @@ function testWorkspaceLayoutModel(): void {
     callId: "ig_image_a",
     sessionPath: "/tmp/session.jsonl",
     hasPrompt: true
-  };
+  });
 
   assert.equal(togglePanelState("expanded"), "collapsed");
   assert.equal(togglePanelState("collapsed"), "expanded");
@@ -930,7 +1119,7 @@ function testWorkspaceBarRendering(): void {
 
 function testGalleryViewRendering(): void {
   const noop = () => undefined;
-  const image = {
+  const image = createImageRecord({
     id: "image-a",
     filePath: "/tmp/image-a.png",
     fileName: "ig_image_a.png",
@@ -945,7 +1134,7 @@ function testGalleryViewRendering(): void {
     callId: "ig_image_a",
     sessionPath: "/tmp/session.jsonl",
     hasPrompt: true
-  };
+  });
 
   const detailedMarkup = renderToStaticMarkup(
     createElement(GalleryPane, {
@@ -1254,6 +1443,8 @@ function createImageRecord(overrides: Partial<ImageRecord> = {}): ImageRecord {
     generatedAt: "2026-05-21T11:46:07.558Z",
     fileModifiedAt: "2026-05-21T11:46:07.558Z",
     prompt: "Create a clean Apple poster with glass detail.",
+    promptSource: "revised_prompt",
+    promptCapturedAt: "2026-05-21T11:46:07.558Z",
     width: 1,
     height: 1,
     sizeBytes: 68,
@@ -1329,6 +1520,8 @@ async function testDesktopNativeClipboardEndpoint(root: string): Promise<void> {
   const generatedImagesDir = path.join(codexRoot, "generated_images");
   const imageDir = path.join(generatedImagesDir, sessionId);
   const sessionsDir = path.join(codexRoot, "sessions");
+  const sessionLogDir = path.join(sessionsDir, "2026", "05", "21");
+  const sessionLogPath = path.join(sessionLogDir, `rollout-2026-05-21T19-42-30-${sessionId}.jsonl`);
   const databasePath = path.join(root, "native-clipboard.sqlite");
   const imagePath = path.join(imageDir, "ig_native_clipboard.png");
   const thumbnailPath = path.join(root, "native-thumb.png");
@@ -1337,9 +1530,25 @@ async function testDesktopNativeClipboardEndpoint(root: string): Promise<void> {
   const port = await findAvailablePort(48_980);
 
   await fs.mkdir(imageDir, { recursive: true });
-  await fs.mkdir(sessionsDir, { recursive: true });
+  await fs.mkdir(sessionLogDir, { recursive: true });
   await fs.writeFile(imagePath, Buffer.from(PNG_1X1, "base64"));
   await fs.writeFile(thumbnailPath, Buffer.from(PNG_1X1, "base64"));
+  await fs.writeFile(
+    sessionLogPath,
+    [
+      createMessageLine("2026-05-21T11:45:00.000Z", "user", "Use a quiet gallery crop."),
+      JSON.stringify({
+        timestamp: "2026-05-21T11:46:00.000Z",
+        payload: {
+          type: "image_generation_end",
+          call_id: "ig_native_clipboard",
+          saved_path: imagePath,
+          revised_prompt: "A quiet gallery crop."
+        }
+      }),
+      createMessageLine("2026-05-21T11:47:00.000Z", "assistant", "Here is the image.")
+    ].join("\n")
+  );
 
   const runtime = await startCoMateRuntime({
     codexPaths: {
@@ -1377,6 +1586,18 @@ async function testDesktopNativeClipboardEndpoint(root: string): Promise<void> {
     assert.equal(images.total, 1);
 
     const image = images.items[0]!;
+    assert.equal(image.prompt, "A quiet gallery crop.");
+    assert.equal(image.promptSource, "revised_prompt");
+
+    const liveContextResponse = await fetch(`${runtime.url}/api/images/${encodeURIComponent(image.id)}/context`);
+    const liveContext = (await liveContextResponse.json()) as ImageContextResult;
+    assert.equal(liveContext.status, "available");
+    assert.equal(liveContext.source, "live_log");
+    assert.deepEqual(liveContext.messages.map((message) => message.text), [
+      "Use a quiet gallery crop.",
+      "Here is the image."
+    ]);
+
     const thumbnailResponse = await fetch(`${runtime.url}/api/images/${encodeURIComponent(image.id)}/thumb`);
     const thumbnailBytes = Buffer.from(await thumbnailResponse.arrayBuffer());
     assert.equal(thumbnailResponse.ok, true);
@@ -1396,6 +1617,13 @@ async function testDesktopNativeClipboardEndpoint(root: string): Promise<void> {
       size: Buffer.from(PNG_1X1, "base64").length
     });
     assert.deepEqual(copiedPaths, [imagePath]);
+
+    await fs.rm(sessionLogPath);
+    const cachedContextResponse = await fetch(`${runtime.url}/api/images/${encodeURIComponent(image.id)}/context`);
+    const cachedContext = (await cachedContextResponse.json()) as ImageContextResult;
+    assert.equal(cachedContext.status, "cached");
+    assert.equal(cachedContext.source, "cached");
+    assert.deepEqual(cachedContext.messages.map((message) => message.source), ["cached", "cached"]);
   } finally {
     await runtime.close();
   }

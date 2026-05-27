@@ -5,6 +5,7 @@ import { URL } from "node:url";
 
 import type { DatePreset, ImageSearchParams, PromptState } from "../../shared/types.js";
 import type { CodexPaths, ImageClipboardService, ImageIndexStore, ImageThumbnailService } from "../domain/types.js";
+import { createUnavailableContext } from "../application/imageContextService.js";
 import type { IndexingService } from "../application/indexingService.js";
 import type { CodexCapabilityScanner } from "../infrastructure/codexCapabilityScanner.js";
 import { FileLauncher, type FileLaunchAction } from "../infrastructure/fileLauncher.js";
@@ -139,6 +140,12 @@ async function handleApiRequest(
     return;
   }
 
+  const imageContextMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/context$/);
+  if (request.method === "GET" && imageContextMatch) {
+    sendImageContext(options.index, decodeURIComponent(imageContextMatch[1]!), response);
+    return;
+  }
+
   const imageOpenMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/open$/);
   if (request.method === "POST" && imageOpenMatch) {
     const body = await readJsonBody<OpenBody>(request);
@@ -260,6 +267,30 @@ async function sendImageThumbnail(
     "cache-control": "private, max-age=31536000, immutable"
   });
   fs.createReadStream(thumbnail.filePath).pipe(response);
+}
+
+function sendImageContext(index: ImageIndexStore, id: string, response: ServerResponse): void {
+  const record = index.getById(id);
+  if (!record) {
+    sendError(response, 404, "Image not found.");
+    return;
+  }
+
+  const cachedContext =
+    index.getImageContext(id) ?? createUnavailableContext(id, record.generatedAt ?? record.fileModifiedAt);
+  const sessionLogExists = Boolean(record.sessionPath && fs.existsSync(record.sessionPath));
+
+  if (cachedContext.status === "available" && cachedContext.source === "live_log" && !sessionLogExists) {
+    sendJson(response, 200, {
+      ...cachedContext,
+      status: "cached",
+      source: "cached",
+      messages: cachedContext.messages.map((message) => ({ ...message, source: "cached" }))
+    });
+    return;
+  }
+
+  sendJson(response, 200, cachedContext);
 }
 
 function readEnum<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {

@@ -1,7 +1,16 @@
 import { DatabaseSync } from "node:sqlite";
 import type { SQLInputValue } from "node:sqlite";
 
-import type { ImageRecord, ImageSearchParams, ImageSearchResult, SessionFacet } from "../../shared/types.js";
+import type {
+  ImageContextResult,
+  ImageContextSource,
+  ImageContextStatus,
+  ImagePromptSource,
+  ImageRecord,
+  ImageSearchParams,
+  ImageSearchResult,
+  SessionFacet
+} from "../../shared/types.js";
 import type { ImageIndexStore } from "../domain/types.js";
 import { ensureParentDir } from "../utils/fileSystem.js";
 
@@ -15,12 +24,32 @@ interface ImageRow {
   file_modified_at: string;
   sort_at: string;
   prompt: string | null;
+  prompt_source: string;
+  prompt_captured_at: string | null;
   width: number | null;
   height: number | null;
   size_bytes: number;
   call_id: string | null;
   session_path: string | null;
   has_prompt: number;
+}
+
+interface ImageContextStatusRow {
+  image_id: string;
+  anchor_timestamp: string | null;
+  status: string;
+  source: string | null;
+  captured_at: string | null;
+}
+
+interface ImageContextMessageRow {
+  image_id: string;
+  position: number;
+  role: string;
+  text: string;
+  timestamp: string | null;
+  source: string;
+  captured_at: string;
 }
 
 export class SqliteImageIndex implements ImageIndexStore {
@@ -43,9 +72,9 @@ export class SqliteImageIndex implements ImageIndexStore {
     const insertImage = this.db.prepare(`
       INSERT INTO images (
         id, file_path, file_name, session_id, thread_name, generated_at, file_modified_at, sort_at,
-        prompt, width, height, size_bytes, call_id, session_path, has_prompt
+        prompt, prompt_source, prompt_captured_at, width, height, size_bytes, call_id, session_path, has_prompt
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertSearch = this.db.prepare(`
@@ -69,6 +98,8 @@ export class SqliteImageIndex implements ImageIndexStore {
           record.fileModifiedAt,
           getSortAt(record),
           record.prompt,
+          record.promptSource,
+          record.promptCapturedAt,
           record.width,
           record.height,
           record.sizeBytes,
@@ -98,9 +129,9 @@ export class SqliteImageIndex implements ImageIndexStore {
     const upsertImage = this.db.prepare(`
       INSERT INTO images (
         id, file_path, file_name, session_id, thread_name, generated_at, file_modified_at, sort_at,
-        prompt, width, height, size_bytes, call_id, session_path, has_prompt
+        prompt, prompt_source, prompt_captured_at, width, height, size_bytes, call_id, session_path, has_prompt
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         file_path = excluded.file_path,
         file_name = excluded.file_name,
@@ -110,6 +141,8 @@ export class SqliteImageIndex implements ImageIndexStore {
         file_modified_at = excluded.file_modified_at,
         sort_at = excluded.sort_at,
         prompt = excluded.prompt,
+        prompt_source = excluded.prompt_source,
+        prompt_captured_at = excluded.prompt_captured_at,
         width = excluded.width,
         height = excluded.height,
         size_bytes = excluded.size_bytes,
@@ -125,6 +158,8 @@ export class SqliteImageIndex implements ImageIndexStore {
         images.file_modified_at IS NOT excluded.file_modified_at OR
         images.sort_at IS NOT excluded.sort_at OR
         images.prompt IS NOT excluded.prompt OR
+        images.prompt_source IS NOT excluded.prompt_source OR
+        images.prompt_captured_at IS NOT excluded.prompt_captured_at OR
         images.width IS NOT excluded.width OR
         images.height IS NOT excluded.height OR
         images.size_bytes IS NOT excluded.size_bytes OR
@@ -156,6 +191,8 @@ export class SqliteImageIndex implements ImageIndexStore {
           record.fileModifiedAt,
           sortAt,
           record.prompt,
+          record.promptSource,
+          record.promptCapturedAt,
           record.width,
           record.height,
           record.sizeBytes,
@@ -247,6 +284,89 @@ export class SqliteImageIndex implements ImageIndexStore {
     return row ? rowToImageRecord(row) : null;
   }
 
+  getImageContext(imageId: string): ImageContextResult | null {
+    const statusRow = this.db
+      .prepare("SELECT * FROM image_context_status WHERE image_id = ?")
+      .get(imageId) as ImageContextStatusRow | undefined;
+    if (!statusRow) {
+      return null;
+    }
+
+    const messageRows = this.db
+      .prepare("SELECT * FROM image_context_messages WHERE image_id = ? ORDER BY position ASC")
+      .all(imageId) as unknown as ImageContextMessageRow[];
+
+    return {
+      imageId: statusRow.image_id,
+      anchorTimestamp: statusRow.anchor_timestamp,
+      status: normalizeContextStatus(statusRow.status),
+      source: normalizeContextSource(statusRow.source),
+      capturedAt: statusRow.captured_at,
+      messages: messageRows.map((row) => ({
+        position: row.position,
+        role: normalizeContextRole(row.role),
+        text: row.text,
+        timestamp: row.timestamp,
+        source: normalizeContextSource(row.source) ?? "cached",
+        capturedAt: row.captured_at
+      }))
+    };
+  }
+
+  replaceImageContext(context: ImageContextResult): void {
+    this.replaceImageContexts([context]);
+  }
+
+  replaceImageContexts(contexts: ImageContextResult[]): void {
+    if (contexts.length === 0) {
+      return;
+    }
+
+    const replaceStatus = this.db.prepare(`
+      INSERT INTO image_context_status (image_id, anchor_timestamp, status, source, captured_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(image_id) DO UPDATE SET
+        anchor_timestamp = excluded.anchor_timestamp,
+        status = excluded.status,
+        source = excluded.source,
+        captured_at = excluded.captured_at
+    `);
+    const deleteMessages = this.db.prepare("DELETE FROM image_context_messages WHERE image_id = ?");
+    const insertMessage = this.db.prepare(`
+      INSERT INTO image_context_messages (image_id, position, role, text, timestamp, source, captured_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    this.db.exec("BEGIN");
+    try {
+      for (const context of contexts) {
+        replaceStatus.run(
+          context.imageId,
+          context.anchorTimestamp,
+          context.status,
+          context.source,
+          context.capturedAt
+        );
+        deleteMessages.run(context.imageId);
+        for (const message of context.messages) {
+          insertMessage.run(
+            context.imageId,
+            message.position,
+            message.role,
+            message.text,
+            message.timestamp,
+            message.source,
+            message.capturedAt
+          );
+        }
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   listAll(): ImageRecord[] {
     const rows = this.db.prepare("SELECT * FROM images").all() as unknown as ImageRow[];
     return rows.map(rowToImageRecord);
@@ -273,12 +393,35 @@ export class SqliteImageIndex implements ImageIndexStore {
         file_modified_at TEXT NOT NULL,
         sort_at TEXT NOT NULL,
         prompt TEXT,
+        prompt_source TEXT NOT NULL DEFAULT 'none',
+        prompt_captured_at TEXT,
         width INTEGER,
         height INTEGER,
         size_bytes INTEGER NOT NULL,
         call_id TEXT,
         session_path TEXT,
         has_prompt INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS image_context_status (
+        image_id TEXT PRIMARY KEY,
+        anchor_timestamp TEXT,
+        status TEXT NOT NULL,
+        source TEXT,
+        captured_at TEXT,
+        FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS image_context_messages (
+        image_id TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        timestamp TEXT,
+        source TEXT NOT NULL,
+        captured_at TEXT NOT NULL,
+        PRIMARY KEY (image_id, position),
+        FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE
       );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS image_search USING fts5(
@@ -295,6 +438,7 @@ export class SqliteImageIndex implements ImageIndexStore {
       CREATE INDEX IF NOT EXISTS idx_images_session_sort ON images(session_id, sort_at DESC, file_name ASC);
       CREATE INDEX IF NOT EXISTS idx_images_prompt_sort ON images(has_prompt, sort_at DESC, file_name ASC);
       CREATE INDEX IF NOT EXISTS idx_images_session_prompt_sort ON images(session_id, has_prompt, sort_at DESC, file_name ASC);
+      CREATE INDEX IF NOT EXISTS idx_image_context_messages_image_position ON image_context_messages(image_id, position);
     `);
   }
 
@@ -377,6 +521,19 @@ export class SqliteImageIndex implements ImageIndexStore {
       this.db.exec("ALTER TABLE images ADD COLUMN sort_at TEXT");
       this.db.exec("UPDATE images SET sort_at = COALESCE(generated_at, file_modified_at)");
     }
+    if (!columns.some((column) => column.name === "prompt_source")) {
+      this.db.exec("ALTER TABLE images ADD COLUMN prompt_source TEXT NOT NULL DEFAULT 'none'");
+      this.db.exec(`
+        UPDATE images
+        SET prompt_source = CASE
+          WHEN prompt IS NOT NULL AND trim(prompt) <> '' THEN 'revised_prompt'
+          ELSE 'none'
+        END
+      `);
+    }
+    if (!columns.some((column) => column.name === "prompt_captured_at")) {
+      this.db.exec("ALTER TABLE images ADD COLUMN prompt_captured_at TEXT");
+    }
     this.db.exec("UPDATE images SET sort_at = COALESCE(generated_at, file_modified_at) WHERE sort_at IS NULL OR sort_at = ''");
   }
 }
@@ -391,6 +548,8 @@ function rowToImageRecord(row: ImageRow): ImageRecord {
     generatedAt: row.generated_at,
     fileModifiedAt: row.file_modified_at,
     prompt: row.prompt,
+    promptSource: normalizePromptSource(row.prompt_source, row.prompt),
+    promptCapturedAt: row.prompt_captured_at,
     width: row.width,
     height: row.height,
     sizeBytes: row.size_bytes,
@@ -398,6 +557,34 @@ function rowToImageRecord(row: ImageRow): ImageRecord {
     sessionPath: row.session_path,
     hasPrompt: row.has_prompt === 1
   };
+}
+
+function normalizePromptSource(value: string | null | undefined, prompt: string | null): ImagePromptSource {
+  if (value === "revised_prompt" || value === "cached" || value === "none") {
+    return value;
+  }
+  return prompt ? "cached" : "none";
+}
+
+function normalizeContextStatus(value: string): ImageContextStatus {
+  if (value === "available" || value === "cached" || value === "unavailable") {
+    return value;
+  }
+  return "unavailable";
+}
+
+function normalizeContextSource(value: string | null): ImageContextSource | null {
+  if (value === "live_log" || value === "cached") {
+    return value;
+  }
+  return null;
+}
+
+function normalizeContextRole(value: string): ImageContextResult["messages"][number]["role"] {
+  if (value === "user" || value === "assistant" || value === "system" || value === "tool") {
+    return value;
+  }
+  return "system";
 }
 
 function getSortAt(record: Pick<ImageRecord, "generatedAt" | "fileModifiedAt">): string {

@@ -4,6 +4,7 @@ import type {
   CapabilityRecord,
   CapabilityScanResult,
   DatePreset,
+  ImageContextResult,
   ImageRecord,
   ImageSearchResult,
   PromptState,
@@ -11,6 +12,7 @@ import type {
 } from "../shared/types.js";
 import {
   fetchCapabilities,
+  fetchImageContext,
   fetchImages,
   fetchRuntimeStatus,
   copyImageToNativeClipboard,
@@ -87,6 +89,10 @@ export function App() {
   const [rightPanelState, setRightPanelState] = useState<WorkspacePanelState>("expanded");
   const [searchOpen, setSearchOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [imageContext, setImageContext] = useState<ImageContextResult | null>(null);
+  const [imageContextLoading, setImageContextLoading] = useState(false);
+  const [imageContextError, setImageContextError] = useState<string | null>(null);
+  const [imageContextCacheEpoch, setImageContextCacheEpoch] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextImageOffset, setNextImageOffset] = useState(0);
@@ -97,6 +103,7 @@ export function App() {
     [datePreset, debouncedQuery, promptState, sessionId]
   );
   const imageQueryKeyRef = useRef(imageQueryKey);
+  const imageContextCacheRef = useRef(new Map<string, ImageContextResult>());
 
   useEffect(() => {
     imageQueryKeyRef.current = imageQueryKey;
@@ -234,6 +241,47 @@ export function App() {
     () => result.items.find((image) => image.id === selectedId) ?? null,
     [result.items, selectedId]
   );
+
+  useEffect(() => {
+    if (activeModule !== "gallery" || !selectedImage) {
+      setImageContext(null);
+      setImageContextLoading(false);
+      setImageContextError(null);
+      return;
+    }
+
+    const cachedContext = imageContextCacheRef.current.get(selectedImage.id);
+    if (cachedContext) {
+      setImageContext(cachedContext);
+      setImageContextLoading(false);
+      setImageContextError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    setImageContext(null);
+    setImageContextLoading(true);
+    setImageContextError(null);
+
+    fetchImageContext(selectedImage.id, controller.signal)
+      .then((nextContext) => {
+        imageContextCacheRef.current.set(selectedImage.id, nextContext);
+        setImageContext(nextContext);
+      })
+      .catch((nextError) => {
+        if (nextError.name !== "AbortError") {
+          setImageContextError(nextError instanceof Error ? nextError.message : "Unable to load image context.");
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setImageContextLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [activeModule, imageContextCacheEpoch, selectedImage?.id]);
+
   useEffect(() => {
     if (!selectedId || result.items.some((image) => image.id === selectedId)) {
       return;
@@ -333,6 +381,8 @@ export function App() {
     setRefreshing(true);
     setError(null);
     setLoadingMore(false);
+    imageContextCacheRef.current.clear();
+    setImageContextCacheEpoch((current) => current + 1);
     try {
       await reindexLibrary();
       const nextStatus = await fetchRuntimeStatus();
@@ -548,6 +598,9 @@ export function App() {
         {activeModule === "gallery" ? (
           <DetailPanel
             collapsed={rightPanelState === "collapsed"}
+            context={imageContext}
+            contextError={imageContextError}
+            contextLoading={imageContextLoading}
             image={selectedImage}
             onCopyImage={() => void handleCopySelectedImage()}
           />

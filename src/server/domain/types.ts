@@ -1,4 +1,4 @@
-import type { ImageCopyResult, ImageRecord, IndexingProgress } from "../../shared/types.js";
+import type { ImageContextResult, ImageContextRole, ImageCopyResult, ImageRecord, IndexingProgress } from "../../shared/types.js";
 
 export interface CodexPaths {
   codexRoot: string;
@@ -44,6 +44,16 @@ export interface SessionImageEvent {
   revisedPrompt: string | null;
 }
 
+export interface SessionMessageEvent {
+  role: ImageContextRole;
+  text: string;
+  timestamp: string | null;
+}
+
+export type SessionTimelineEvent =
+  | ({ kind: "image" } & SessionImageEvent)
+  | ({ kind: "message" } & SessionMessageEvent);
+
 export interface SessionLogInfo {
   sessionId: string;
   filePath: string;
@@ -55,7 +65,10 @@ export interface ImageIndexStore {
   syncRecords(records: ImageRecord[]): void;
   search(params: import("../../shared/types.js").ImageSearchParams): import("../../shared/types.js").ImageSearchResult;
   getById(id: string): ImageRecord | null;
+  getImageContext(imageId: string): ImageContextResult | null;
   listAll(): ImageRecord[];
+  replaceImageContext(context: ImageContextResult): void;
+  replaceImageContexts(contexts: ImageContextResult[]): void;
   count(): number;
   close(): void;
 }
