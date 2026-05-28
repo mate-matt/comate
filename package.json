@@ -1,6 +1,6 @@
 {
   "name": "comate",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A fully local companion app for Codex Desktop images and capabilities.",
   "private": false,
   "license": "MIT",

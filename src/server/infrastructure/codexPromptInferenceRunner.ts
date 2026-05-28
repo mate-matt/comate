@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,7 @@ import type {
 
 const CODEX_EXEC_MAX_BUFFER = 1024 * 1024;
 const CODEX_HEALTH_TIMEOUT_MS = 8_000;
+const DEFAULT_EXEC_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 interface ExecTextResult {
   stderr: string;
@@ -97,21 +99,81 @@ export class CodexCliPromptInferenceRunner implements CodexPromptInferenceRunner
       return this.executablePath;
     }
 
-    const configuredPath = process.env.COMATE_CODEX_BIN?.trim();
-    if (configuredPath) {
-      await assertExecutableExists(configuredPath);
-      this.executablePath = configuredPath;
-      return configuredPath;
-    }
-
-    const resolved = (await execFileText("/bin/zsh", ["-lc", "command -v codex"], CODEX_HEALTH_TIMEOUT_MS)).stdout.trim();
-    if (!resolved) {
-      throw new Error("Codex CLI was not found in PATH.");
-    }
-
-    this.executablePath = resolved;
-    return resolved;
+    this.executablePath = await resolveCodexExecutablePath();
+    return this.executablePath;
   }
+}
+
+export interface CodexExecutableResolutionOptions {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}
+
+export async function resolveCodexExecutablePath(options: CodexExecutableResolutionOptions = {}): Promise<string> {
+  const env = options.env ?? process.env;
+  const homeDir = options.homeDir ?? env.HOME ?? os.homedir();
+  const configuredPath = env.COMATE_CODEX_BIN?.trim();
+  if (configuredPath) {
+    const expanded = expandHomePath(configuredPath, homeDir);
+    await assertExecutableExists(expanded);
+    return expanded;
+  }
+
+  const shellPaths = await readCodexShellPaths(env);
+  const nvmVersionNames = await readNvmVersionNames(homeDir);
+  const candidates = buildCodexExecutableCandidates({
+    env,
+    homeDir,
+    nvmVersionNames,
+    shellPaths
+  });
+
+  for (const candidate of candidates) {
+    if (await isExecutableFile(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    [
+      "Codex CLI was not found.",
+      "Checked PATH, login shell, nvm, Homebrew, Volta, asdf, and ~/.local/bin.",
+      "Install Codex CLI or set COMATE_CODEX_BIN to the full codex executable path."
+    ].join(" ")
+  );
+}
+
+export function buildCodexExecutableCandidates(options: {
+  env: NodeJS.ProcessEnv;
+  homeDir: string;
+  nvmVersionNames?: string[];
+  shellPaths?: string[];
+}): string[] {
+  const configuredPath = options.env.COMATE_CODEX_BIN?.trim();
+  const pathCandidates = splitPath(options.env.PATH).map((directory) => path.join(directory, "codex"));
+  const nvmCandidates = [...(options.nvmVersionNames ?? [])]
+    .sort(compareNodeVersionNamesDescending)
+    .map((versionName) => path.join(options.homeDir, ".nvm", "versions", "node", versionName, "bin", "codex"));
+  const commonCandidates = [
+    path.join(options.homeDir, ".volta", "bin", "codex"),
+    path.join(options.homeDir, ".asdf", "shims", "codex"),
+    path.join(options.homeDir, ".local", "bin", "codex"),
+    path.join(options.homeDir, ".npm-global", "bin", "codex"),
+    "/opt/homebrew/bin/codex",
+    "/usr/local/bin/codex"
+  ];
+
+  return uniquePaths([
+    configuredPath ? expandHomePath(configuredPath, options.homeDir) : null,
+    ...(options.shellPaths ?? []),
+    ...pathCandidates,
+    ...nvmCandidates,
+    ...commonCandidates
+  ]);
+}
+
+export function buildCodexChildPath(executablePath: string, basePath: string | undefined): string {
+  return uniquePaths([path.dirname(executablePath), ...splitPath(basePath), ...splitPath(DEFAULT_EXEC_PATH)]).join(path.delimiter);
 }
 
 export function buildCodexPromptInferenceArgs(options: {
@@ -235,18 +297,27 @@ function trimForPrompt(value: string, maxLength: number): string {
 
 async function assertExecutableExists(filePath: string): Promise<void> {
   try {
-    await fs.access(filePath);
+    await fs.access(filePath, fsConstants.X_OK);
   } catch {
     throw new Error(`Configured Codex CLI was not found: ${filePath}`);
   }
 }
 
-function execFileText(file: string, args: string[], timeoutMs: number): Promise<ExecTextResult> {
+function execFileText(
+  file: string,
+  args: string[],
+  timeoutMs: number,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<ExecTextResult> {
   return new Promise((resolve, reject) => {
     const child = execFile(
       file,
       args,
       {
+        env: {
+          ...env,
+          PATH: buildCodexChildPath(file, env.PATH)
+        },
         maxBuffer: CODEX_EXEC_MAX_BUFFER,
         timeout: timeoutMs,
         windowsHide: true
@@ -265,6 +336,91 @@ function execFileText(file: string, args: string[], timeoutMs: number): Promise<
     // so a prompt passed as an argv argument can run non-interactively.
     child.stdin?.end();
   });
+}
+
+async function readCodexShellPaths(env: NodeJS.ProcessEnv): Promise<string[]> {
+  const paths = await Promise.all([
+    readCodexShellPath(["-lc", "command -v codex"], env),
+    readCodexShellPath(["-lic", "command -v codex"], env)
+  ]);
+  return paths.filter((candidate): candidate is string => Boolean(candidate));
+}
+
+async function readCodexShellPath(args: string[], env: NodeJS.ProcessEnv): Promise<string | null> {
+  try {
+    const result = await execFileText("/bin/zsh", args, CODEX_HEALTH_TIMEOUT_MS, env);
+    return firstLine(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+async function readNvmVersionNames(homeDir: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(path.join(homeDir, ".nvm", "versions", "node"), { withFileTypes: true });
+    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+async function isExecutableFile(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function expandHomePath(filePath: string, homeDir: string): string {
+  if (filePath === "~") {
+    return homeDir;
+  }
+  if (filePath.startsWith("~/")) {
+    return path.join(homeDir, filePath.slice(2));
+  }
+  return filePath;
+}
+
+function splitPath(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function uniquePaths(paths: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const candidate of paths) {
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    unique.push(candidate);
+  }
+  return unique;
+}
+
+function compareNodeVersionNamesDescending(left: string, right: string): number {
+  const leftParts = parseNodeVersionName(left);
+  const rightParts = parseNodeVersionName(right);
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const diff = (rightParts[index] ?? 0) - (leftParts[index] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return right.localeCompare(left);
+}
+
+function parseNodeVersionName(value: string): number[] {
+  return value
+    .replace(/^v/i, "")
+    .split(".")
+    .map((part) => Number.parseInt(part, 10))
+    .map((part) => (Number.isFinite(part) ? part : 0));
 }
 
 async function readCodexOutput(outputPath: string, stdout: string): Promise<string> {

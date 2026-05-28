@@ -27,7 +27,12 @@ import { detectCodexDesktopData } from "../src/server/infrastructure/codexDeskto
 import { CodexCapabilityScanner } from "../src/server/infrastructure/codexCapabilityScanner.js";
 import { CodexImageScanner } from "../src/server/infrastructure/codexImageScanner.js";
 import { CodexSessionRepository } from "../src/server/infrastructure/codexSessionRepository.js";
-import { buildCodexPromptInferenceArgs } from "../src/server/infrastructure/codexPromptInferenceRunner.js";
+import {
+  buildCodexChildPath,
+  buildCodexExecutableCandidates,
+  buildCodexPromptInferenceArgs,
+  resolveCodexExecutablePath
+} from "../src/server/infrastructure/codexPromptInferenceRunner.js";
 import { getThumbnailCachePath } from "../src/server/infrastructure/imageThumbnailService.js";
 import { SqliteImageIndex } from "../src/server/infrastructure/sqliteImageIndex.js";
 import { getNavigationDecision } from "../src/desktop/domain/navigationPolicy.js";
@@ -92,6 +97,8 @@ async function main(): Promise<void> {
     console.log("ok prompt-inference/storage-api");
     testCodexPromptInferenceArgs();
     console.log("ok prompt-inference/codex-args");
+    await testCodexPromptInferenceResolver(root);
+    console.log("ok prompt-inference/codex-resolver");
     await testCapabilityScanner(root);
     console.log("ok scanner/capabilities");
     testSearchUiRendering();
@@ -782,6 +789,48 @@ function testCodexPromptInferenceArgs(): void {
   assert.ok(args.includes("--model"));
   assert.ok(args.includes("gpt-test"));
   assert.equal(args.at(-1), "Infer the prompt.");
+
+  const candidates = buildCodexExecutableCandidates({
+    env: {
+      COMATE_CODEX_BIN: "~/bin/codex",
+      PATH: "/usr/bin:/bin"
+    },
+    homeDir: "/Users/test",
+    nvmVersionNames: ["v22.22.0", "v24.14.1"],
+    shellPaths: ["/shell/codex"]
+  });
+  assert.deepEqual(candidates.slice(0, 6), [
+    "/Users/test/bin/codex",
+    "/shell/codex",
+    "/usr/bin/codex",
+    "/bin/codex",
+    "/Users/test/.nvm/versions/node/v24.14.1/bin/codex",
+    "/Users/test/.nvm/versions/node/v22.22.0/bin/codex"
+  ]);
+
+  const childPath = buildCodexChildPath(
+    "/Users/test/.nvm/versions/node/v24.14.1/bin/codex",
+    "/usr/bin:/bin"
+  );
+  assert.equal(childPath.split(path.delimiter)[0], "/Users/test/.nvm/versions/node/v24.14.1/bin");
+  assert.ok(childPath.includes("/opt/homebrew/bin"));
+}
+
+async function testCodexPromptInferenceResolver(root: string): Promise<void> {
+  const fakeHome = path.join(root, "fake-home");
+  const fakeCodex = path.join(fakeHome, ".nvm", "versions", "node", "v24.14.1", "bin", "codex");
+  await fs.mkdir(path.dirname(fakeCodex), { recursive: true });
+  await fs.writeFile(fakeCodex, "#!/bin/sh\nexit 0\n", "utf8");
+  await fs.chmod(fakeCodex, 0o755);
+
+  const resolved = await resolveCodexExecutablePath({
+    env: {
+      HOME: fakeHome,
+      PATH: "/usr/bin:/bin"
+    },
+    homeDir: fakeHome
+  });
+  assert.equal(resolved, fakeCodex);
 }
 
 async function testCapabilityScanner(root: string): Promise<void> {
