@@ -11,17 +11,23 @@ import type {
   CapabilityScanResult,
   ImageContextResult,
   ImageCopyResult,
+  ImagePromptInferenceRecord,
   ImageRecord,
-  ImageSearchResult
+  ImageSearchResult,
+  PromptInferenceTasksResponse,
+  PromptInferenceTaskView,
+  PromptInferenceResultData
 } from "../src/shared/types.js";
 import { buildImageContext } from "../src/server/application/imageContextService.js";
 import { LibraryService } from "../src/server/application/libraryService.js";
 import { startCoMateRuntime } from "../src/server/application/serverRuntime.js";
+import type { CodexPromptInferenceInput, CodexPromptInferenceRunner } from "../src/server/domain/types.js";
 import { normalizeStaticPath } from "../src/server/api/staticAssets.js";
 import { detectCodexDesktopData } from "../src/server/infrastructure/codexDesktopDetector.js";
 import { CodexCapabilityScanner } from "../src/server/infrastructure/codexCapabilityScanner.js";
 import { CodexImageScanner } from "../src/server/infrastructure/codexImageScanner.js";
 import { CodexSessionRepository } from "../src/server/infrastructure/codexSessionRepository.js";
+import { buildCodexPromptInferenceArgs } from "../src/server/infrastructure/codexPromptInferenceRunner.js";
 import { getThumbnailCachePath } from "../src/server/infrastructure/imageThumbnailService.js";
 import { SqliteImageIndex } from "../src/server/infrastructure/sqliteImageIndex.js";
 import { getNavigationDecision } from "../src/desktop/domain/navigationPolicy.js";
@@ -61,6 +67,7 @@ import {
   getClipboardImageMimeType,
   shouldHandleImageCopyShortcut
 } from "../src/web/domain/imageClipboard.js";
+import { ensureImageInResult } from "../src/web/domain/imageSelection.js";
 import {
   getImageWorkspaceHeader,
   getWorkspaceClassName,
@@ -81,6 +88,10 @@ async function main(): Promise<void> {
     console.log("ok session/context-model");
     await testSqliteIncrementalIndex(root);
     console.log("ok sqlite/incremental-index");
+    await testPromptInferenceStorageAndApi(root);
+    console.log("ok prompt-inference/storage-api");
+    testCodexPromptInferenceArgs();
+    console.log("ok prompt-inference/codex-args");
     await testCapabilityScanner(root);
     console.log("ok scanner/capabilities");
     testSearchUiRendering();
@@ -91,6 +102,8 @@ async function main(): Promise<void> {
     console.log("ok web/capability-view");
     testImagePaginationModel();
     console.log("ok web/image-pagination");
+    testImageSelectionModel();
+    console.log("ok web/image-selection");
     testSidebarResizeModel();
     console.log("ok web/sidebar-resize");
     testSidebarResizeHandleRendering();
@@ -566,6 +579,13 @@ async function testSqliteIncrementalIndex(root: string): Promise<void> {
         }
       ]
     } satisfies ImageContextResult);
+    index.replacePromptInference(createPromptInferenceRecord({ imageId: older.id }));
+    index.replacePromptInference(
+      createPromptInferenceRecord({
+        imageId: newer.id,
+        result: createPromptInferenceResult("newer inferred prompt", "newer inferred prompt")
+      })
+    );
 
     const initialSearch = index.search({ limit: 20 });
     assert.equal(initialSearch.total, 2);
@@ -573,6 +593,7 @@ async function testSqliteIncrementalIndex(root: string): Promise<void> {
     assert.equal(initialSearch.items[0]?.promptSource, "revised_prompt");
     assert.equal(initialSearch.facets.totalImages, 2);
     assert.equal(index.getImageContext("older")?.messages[0]?.text, "older context");
+    assert.equal(index.getPromptInference("older")?.result?.prompt.en, "Inferred English prompt");
 
     const updatedOlder = {
       ...older,
@@ -590,11 +611,177 @@ async function testSqliteIncrementalIndex(root: string): Promise<void> {
     assert.equal(updatedSearch.items[0]?.id, "older");
     assert.equal(index.getById("newer"), null);
     assert.equal(index.getImageContext("newer"), null);
+    assert.equal(index.getPromptInference("newer"), null);
     assert.equal(index.getImageContext("older")?.messages[0]?.text, "older context");
+    assert.equal(index.getPromptInference("older")?.result?.prompt.zh, "推断的中文提示词");
     assert.equal(updatedSearch.facets.totalImages, 1);
   } finally {
     index.close();
   }
+}
+
+async function testPromptInferenceStorageAndApi(root: string): Promise<void> {
+  const sessionId = "019e4a58-2295-78d2-ae37-3a8c0f2fa4de";
+  const codexRoot = path.join(root, ".codex-prompt-inference");
+  const generatedImagesDir = path.join(codexRoot, "generated_images");
+  const imageDir = path.join(generatedImagesDir, sessionId);
+  const sessionsDir = path.join(codexRoot, "sessions");
+  const sessionLogDir = path.join(sessionsDir, "2026", "05", "22");
+  const sessionLogPath = path.join(sessionLogDir, `rollout-2026-05-22T10-00-00-${sessionId}.jsonl`);
+  const databasePath = path.join(root, "prompt-inference.sqlite");
+  const imagePath = path.join(imageDir, "ig_without_prompt.png");
+  const port = await findAvailablePort(49_080);
+  const calls: CodexPromptInferenceInput[] = [];
+  const runner: CodexPromptInferenceRunner = {
+    checkHealth: async () => ({
+      available: true,
+      checkedAt: "2026-05-22T00:00:00.000Z",
+      executablePath: "/usr/local/bin/codex",
+      version: "codex-cli-test",
+      supportsImages: true,
+      error: null
+    }),
+    inferPrompt: async (input) => {
+      calls.push(input);
+      return {
+        confidence: "high",
+        model: "codex-test",
+        result: createPromptInferenceResult("测试中文提示词", "Test English prompt")
+      };
+    }
+  };
+
+  await fs.mkdir(imageDir, { recursive: true });
+  await fs.mkdir(sessionLogDir, { recursive: true });
+  await fs.writeFile(imagePath, Buffer.from(PNG_1X1, "base64"));
+  await fs.writeFile(
+    sessionLogPath,
+    [
+      createMessageLine("2026-05-22T09:59:40.000Z", "user", "Use a cinematic neon street scene."),
+      JSON.stringify({
+        timestamp: "2026-05-22T10:00:00.000Z",
+        payload: {
+          type: "image_generation_end",
+          call_id: "ig_without_prompt",
+          saved_path: imagePath
+        }
+      }),
+      createMessageLine("2026-05-22T10:00:20.000Z", "assistant", "The image is ready.")
+    ].join("\n")
+  );
+
+  const runtime = await startCoMateRuntime({
+    codexPaths: {
+      codexRoot,
+      databasePath,
+      generatedImagesDir,
+      sessionIndexPath: path.join(codexRoot, "session_index.jsonl"),
+      sessionsDir
+    },
+    port,
+    promptInferenceRunner: runner,
+    staticDir: null
+  });
+
+  try {
+    await runtime.initialIndex;
+    const imagesResponse = await fetch(`${runtime.url}/api/images`);
+    const images = (await imagesResponse.json()) as ImageSearchResult;
+    assert.equal(images.total, 1);
+    const image = images.items[0]!;
+    assert.equal(image.hasPrompt, false);
+
+    const emptyResponse = await fetch(`${runtime.url}/api/images/${encodeURIComponent(image.id)}/prompt-inference`);
+    const empty = (await emptyResponse.json()) as { inference: ImagePromptInferenceRecord | null };
+    assert.equal(empty.inference, null);
+
+    const enqueueResponse = await fetch(`${runtime.url}/api/images/${encodeURIComponent(image.id)}/prompt-inference/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const enqueued = (await enqueueResponse.json()) as { task: PromptInferenceTaskView };
+    assert.equal(enqueueResponse.status, 202);
+    assert.equal(enqueued.task.imageId, image.id);
+    assert.ok(["queued", "running", "ready"].includes(enqueued.task.status));
+
+    const tasks = await waitForPromptTaskStatus(runtime.url, enqueued.task.id, "ready");
+    assert.equal(tasks.summary.ready, 1);
+    assert.equal(tasks.summary.total, 1);
+    assert.equal(tasks.tasks[0]?.imageId, image.id);
+    assert.equal(calls.length, 1);
+
+    const inferResponse = await fetch(`${runtime.url}/api/images/${encodeURIComponent(image.id)}/prompt-inference`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const inferred = (await inferResponse.json()) as { inference: ImagePromptInferenceRecord };
+    assert.equal(inferResponse.ok, true);
+    assert.equal(inferred.inference.status, "ready");
+    assert.equal(inferred.inference.source, "codex_agent");
+    assert.equal(inferred.inference.confidence, "high");
+    assert.equal(inferred.inference.result?.prompt.zh, "测试中文提示词");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.image.filePath, imagePath);
+    assert.equal(calls[0]?.context?.messages[0]?.text, "Use a cinematic neon street scene.");
+
+    const cachedResponse = await fetch(`${runtime.url}/api/images/${encodeURIComponent(image.id)}/prompt-inference`, {
+      method: "POST"
+    });
+    const cached = (await cachedResponse.json()) as { inference: ImagePromptInferenceRecord };
+    assert.equal(cached.inference.result?.prompt.en, "Test English prompt");
+    assert.equal(calls.length, 1);
+
+    const regenerateResponse = await fetch(`${runtime.url}/api/images/${encodeURIComponent(image.id)}/prompt-inference`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ regenerate: true })
+    });
+    assert.equal(regenerateResponse.ok, true);
+    assert.equal(calls.length, 2);
+  } finally {
+    await runtime.close();
+  }
+}
+
+async function waitForPromptTaskStatus(
+  runtimeUrl: string,
+  taskId: string,
+  status: PromptInferenceTaskView["status"]
+): Promise<PromptInferenceTasksResponse> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const response = await fetch(`${runtimeUrl}/api/prompt-inference/tasks`);
+    const tasks = (await response.json()) as PromptInferenceTasksResponse;
+    if (tasks.tasks.some((task) => task.id === taskId && task.status === status)) {
+      return tasks;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Prompt inference task ${taskId} did not reach ${status}.`);
+}
+
+function testCodexPromptInferenceArgs(): void {
+  const args = buildCodexPromptInferenceArgs({
+    imagePath: "/tmp/image.png",
+    outputPath: "/tmp/output.json",
+    prompt: "Infer the prompt.",
+    requestedModel: "gpt-test",
+    schemaPath: "/tmp/schema.json"
+  });
+
+  assert.equal(args[0], "exec");
+  assert.equal(args.includes("--ask-for-approval"), false);
+  assert.ok(args.indexOf("--sandbox") > args.indexOf("exec"));
+  assert.ok(args.includes("--image"));
+  assert.ok(args.includes("/tmp/image.png"));
+  assert.ok(args.includes("--output-schema"));
+  assert.ok(args.includes("/tmp/schema.json"));
+  assert.ok(args.includes("--output-last-message"));
+  assert.ok(args.includes("/tmp/output.json"));
+  assert.ok(args.includes("--model"));
+  assert.ok(args.includes("gpt-test"));
+  assert.equal(args.at(-1), "Infer the prompt.");
 }
 
 async function testCapabilityScanner(root: string): Promise<void> {
@@ -874,19 +1061,123 @@ function testSearchUiRendering(): void {
   assert.equal(detailMarkup.includes('aria-label="Copy file path"'), false);
   assert.match(detailMarkup, /制作 Apple 3D 海报/);
 
-  const contextMarkup = renderToStaticMarkup(
+  const noPromptMarkup = renderToStaticMarkup(
     createElement(DetailPanel, {
       context: detailContext,
       image: createImageRecord({ hasPrompt: false, prompt: null, promptCapturedAt: null, promptSource: "none" }),
       onCopyImage: noop
     })
   );
-  assert.match(contextMarkup, /class="detail-tab-panel detail-tab-panel-context"/);
-  assert.match(contextMarkup, /Local session log/);
-  assert.match(contextMarkup, /Before/);
-  assert.match(contextMarkup, /Image generated here/);
-  assert.match(contextMarkup, /Make the glass softer/);
-  assert.match(contextMarkup, /aria-label="Copy context"/);
+  assert.match(noPromptMarkup, /class="detail-tab-panel detail-tab-panel-prompt"/);
+  assert.match(noPromptMarkup, /No exact prompt found/);
+  assert.match(noPromptMarkup, /Infer prompt/);
+
+  const inferredMarkup = renderToStaticMarkup(
+    createElement(DetailPanel, {
+      context: detailContext,
+      image: createImageRecord({ hasPrompt: false, prompt: null, promptCapturedAt: null, promptSource: "none" }),
+      onCopyImage: noop,
+      onInferPrompt: noop,
+      promptInference: createPromptInferenceRecord()
+    })
+  );
+  assert.match(inferredMarkup, /Codex inferred/);
+  assert.match(inferredMarkup, /中文/);
+  assert.match(inferredMarkup, /English/);
+  assert.match(inferredMarkup, /推断的中文提示词/);
+  assert.match(inferredMarkup, /Subject/);
+
+  const noPromptImage = createImageRecord({
+    hasPrompt: false,
+    prompt: null,
+    promptCapturedAt: null,
+    promptSource: "none"
+  });
+  const runningTask = createPromptTaskView({
+    id: "task-running",
+    image: noPromptImage,
+    imageId: noPromptImage.id,
+    status: "running"
+  });
+  const queuedTasks = [1, 2, 3].map((position) =>
+    createPromptTaskView({
+      id: `task-queued-${position}`,
+      image: createImageRecord({
+        id: `image-queued-${position}`,
+        filePath: `/tmp/queued-${position}.png`,
+        fileName: `queued-${position}.png`,
+        hasPrompt: false,
+        prompt: null,
+        promptCapturedAt: null,
+        promptSource: "none"
+      }),
+      imageId: `image-queued-${position}`,
+      position,
+      status: "queued"
+    })
+  );
+  const failedTask = createPromptTaskView({
+    id: "task-failed",
+    image: createImageRecord({
+      id: "image-failed",
+      filePath: "/tmp/failed.png",
+      fileName: "failed.png",
+      hasPrompt: false,
+      prompt: null,
+      promptCapturedAt: null,
+      promptSource: "none"
+    }),
+    imageId: "image-failed",
+    status: "failed",
+    error: "Codex prompt inference failed."
+  });
+  const readyTask = createPromptTaskView({
+    id: "task-ready",
+    image: noPromptImage,
+    imageId: noPromptImage.id,
+    inference: createPromptInferenceRecord({ imageId: noPromptImage.id }),
+    status: "ready"
+  });
+  const promptTasks = createPromptTasksResponse([runningTask, ...queuedTasks, failedTask, readyTask]);
+  const taskEntryMarkup = renderToStaticMarkup(
+    createElement(DetailPanel, {
+      context: detailContext,
+      image: noPromptImage,
+      onCancelPromptTask: noop,
+      onCopyImage: noop,
+      onInferPrompt: noop,
+      onRefreshPromptTasks: noop,
+      onRetryPromptTask: noop,
+      onViewPromptTaskImage: noop,
+      promptTask: runningTask,
+      promptTasks
+    })
+  );
+  assert.match(taskEntryMarkup, /Codex prompts/);
+  assert.match(taskEntryMarkup, /1 running · 3 queued/);
+  assert.match(taskEntryMarkup, /Codex is inferring/);
+
+  const taskPageMarkup = renderToStaticMarkup(
+    createElement(DetailPanel, {
+      image: noPromptImage,
+      initialPage: "promptTasks",
+      onCancelPromptTask: noop,
+      onRefreshPromptTasks: noop,
+      onRetryPromptTask: noop,
+      onViewPromptTaskImage: noop,
+      promptTasks
+    })
+  );
+  assert.match(taskPageMarkup, /Codex prompt tasks/);
+  assert.match(taskPageMarkup, /aria-label="Back to image detail"/);
+  assert.match(taskPageMarkup, />Running</);
+  assert.match(taskPageMarkup, />Queued</);
+  assert.match(taskPageMarkup, /Needs attention/);
+  assert.match(taskPageMarkup, />Recent</);
+  assert.match(taskPageMarkup, />View</);
+  assert.match(taskPageMarkup, />Cancel</);
+  assert.match(taskPageMarkup, />Retry</);
+  assert.match(taskPageMarkup, /\/api\/images\/image-queued-1\/thumb/);
 }
 
 function testWorkspaceLayoutModel(): void {
@@ -968,6 +1259,32 @@ function testImagePaginationModel(): void {
   assert.equal(canLoadNextImagePage({ loading: false, loadingMore: false, nextOffset: 120, total: 240 }), true);
   assert.equal(canLoadNextImagePage({ loading: true, loadingMore: false, nextOffset: 120, total: 240 }), false);
   assert.equal(canLoadNextImagePage({ loading: false, loadingMore: false, nextOffset: 240, total: 240 }), false);
+}
+
+function testImageSelectionModel(): void {
+  const a = createImageRecord({ id: "a", filePath: "/tmp/a.png" });
+  const b = createImageRecord({ id: "b", filePath: "/tmp/b.png" });
+  const updatedA = createImageRecord({ id: "a", filePath: "/tmp/a.png", threadName: "updated" });
+
+  const baseResult: ImageSearchResult = {
+    items: [a],
+    total: 12,
+    facets: createImageFacets()
+  };
+
+  const replaced = ensureImageInResult(baseResult, updatedA);
+  assert.equal(replaced.items.length, 1);
+  assert.equal(replaced.items[0]?.threadName, "updated");
+  assert.equal(replaced.total, 12);
+
+  const inserted = ensureImageInResult(baseResult, b);
+  assert.equal(inserted.items[0]?.id, "b");
+  assert.equal(inserted.items[1]?.id, "a");
+  assert.equal(inserted.total, 12);
+
+  const emptyInserted = ensureImageInResult({ ...baseResult, items: [], total: 0 }, b);
+  assert.equal(emptyInserted.items[0]?.id, "b");
+  assert.equal(emptyInserted.total, 1);
 }
 
 function testSidebarResizeModel(): void {
@@ -1453,6 +1770,83 @@ function createImageRecord(overrides: Partial<ImageRecord> = {}): ImageRecord {
     hasPrompt: true,
     ...overrides
   };
+}
+
+function createPromptInferenceResult(
+  zhPrompt = "推断的中文提示词",
+  enPrompt = "Inferred English prompt"
+): PromptInferenceResultData {
+  return {
+    prompt: {
+      zh: zhPrompt,
+      en: enPrompt
+    },
+    negativePrompt: {
+      zh: "低清晰度，变形",
+      en: "low quality, distorted"
+    },
+    structure: {
+      subject: { zh: "主体", en: "subject" },
+      style: { zh: "风格", en: "style" },
+      composition: { zh: "构图", en: "composition" },
+      lighting: { zh: "光线", en: "lighting" },
+      colorPalette: { zh: "色彩", en: "color" },
+      technicalNotes: { zh: "技术细节", en: "technical details" }
+    }
+  };
+}
+
+function createPromptInferenceRecord(
+  overrides: Partial<ImagePromptInferenceRecord> = {}
+): ImagePromptInferenceRecord {
+  return {
+    imageId: "image-a",
+    status: "ready",
+    source: "codex_agent",
+    model: "codex-test",
+    confidence: "medium",
+    result: createPromptInferenceResult(),
+    error: null,
+    createdAt: "2026-05-22T00:00:00.000Z",
+    updatedAt: "2026-05-22T00:00:00.000Z",
+    ...overrides
+  };
+}
+
+function createPromptTaskView(overrides: Partial<PromptInferenceTaskView> = {}): PromptInferenceTaskView {
+  const image = overrides.image ?? createImageRecord({ hasPrompt: false, prompt: null, promptCapturedAt: null, promptSource: "none" });
+  return {
+    id: "task-a",
+    imageId: image.id,
+    image,
+    status: "queued",
+    position: 1,
+    queuedAt: "2026-05-22T00:00:00.000Z",
+    startedAt: null,
+    finishedAt: null,
+    updatedAt: "2026-05-22T00:00:00.000Z",
+    regenerate: false,
+    inference: null,
+    error: null,
+    ...overrides
+  };
+}
+
+function createPromptTasksResponse(tasks: PromptInferenceTaskView[]): PromptInferenceTasksResponse {
+  const summary: PromptInferenceTasksResponse["summary"] = {
+    active: 0,
+    canceled: 0,
+    failed: 0,
+    queued: 0,
+    ready: 0,
+    running: 0,
+    total: tasks.length
+  };
+  for (const task of tasks) {
+    summary[task.status] += 1;
+  }
+  summary.active = summary.running + summary.queued;
+  return { summary, tasks };
 }
 
 function createImageFacets(overrides: Partial<ImageSearchResult["facets"]> = {}): ImageSearchResult["facets"] {

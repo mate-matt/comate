@@ -5,10 +5,13 @@ import type {
   ImageContextResult,
   ImageContextSource,
   ImageContextStatus,
+  ImagePromptInferenceRecord,
   ImagePromptSource,
   ImageRecord,
   ImageSearchParams,
   ImageSearchResult,
+  PromptInferenceConfidence,
+  PromptInferenceResultData,
   SessionFacet
 } from "../../shared/types.js";
 import type { ImageIndexStore } from "../domain/types.js";
@@ -50,6 +53,18 @@ interface ImageContextMessageRow {
   timestamp: string | null;
   source: string;
   captured_at: string;
+}
+
+interface PromptInferenceRow {
+  image_id: string;
+  status: string;
+  source: string;
+  model: string | null;
+  confidence: string | null;
+  result_json: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export class SqliteImageIndex implements ImageIndexStore {
@@ -313,6 +328,13 @@ export class SqliteImageIndex implements ImageIndexStore {
     };
   }
 
+  getPromptInference(imageId: string): ImagePromptInferenceRecord | null {
+    const row = this.db
+      .prepare("SELECT * FROM image_prompt_inferences WHERE image_id = ?")
+      .get(imageId) as PromptInferenceRow | undefined;
+    return row ? rowToPromptInference(row) : null;
+  }
+
   replaceImageContext(context: ImageContextResult): void {
     this.replaceImageContexts([context]);
   }
@@ -365,6 +387,37 @@ export class SqliteImageIndex implements ImageIndexStore {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  replacePromptInference(inference: ImagePromptInferenceRecord): void {
+    this.db
+      .prepare(
+        `
+        INSERT INTO image_prompt_inferences (
+          image_id, status, source, model, confidence, result_json, error, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(image_id) DO UPDATE SET
+          status = excluded.status,
+          source = excluded.source,
+          model = excluded.model,
+          confidence = excluded.confidence,
+          result_json = excluded.result_json,
+          error = excluded.error,
+          updated_at = excluded.updated_at
+      `
+      )
+      .run(
+        inference.imageId,
+        inference.status,
+        inference.source,
+        inference.model,
+        inference.confidence,
+        inference.result ? JSON.stringify(inference.result) : null,
+        inference.error,
+        inference.createdAt,
+        inference.updatedAt
+      );
   }
 
   listAll(): ImageRecord[] {
@@ -424,6 +477,19 @@ export class SqliteImageIndex implements ImageIndexStore {
         FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS image_prompt_inferences (
+        image_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        source TEXT NOT NULL,
+        model TEXT,
+        confidence TEXT,
+        result_json TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE
+      );
+
       CREATE VIRTUAL TABLE IF NOT EXISTS image_search USING fts5(
         id UNINDEXED,
         file_name,
@@ -439,6 +505,7 @@ export class SqliteImageIndex implements ImageIndexStore {
       CREATE INDEX IF NOT EXISTS idx_images_prompt_sort ON images(has_prompt, sort_at DESC, file_name ASC);
       CREATE INDEX IF NOT EXISTS idx_images_session_prompt_sort ON images(session_id, has_prompt, sort_at DESC, file_name ASC);
       CREATE INDEX IF NOT EXISTS idx_image_context_messages_image_position ON image_context_messages(image_id, position);
+      CREATE INDEX IF NOT EXISTS idx_image_prompt_inferences_updated ON image_prompt_inferences(updated_at DESC);
     `);
   }
 
@@ -559,6 +626,20 @@ function rowToImageRecord(row: ImageRow): ImageRecord {
   };
 }
 
+function rowToPromptInference(row: PromptInferenceRow): ImagePromptInferenceRecord {
+  return {
+    imageId: row.image_id,
+    status: row.status === "ready" ? "ready" : "failed",
+    source: "codex_agent",
+    model: row.model,
+    confidence: normalizePromptInferenceConfidence(row.confidence),
+    result: parsePromptInferenceResult(row.result_json),
+    error: row.error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 function normalizePromptSource(value: string | null | undefined, prompt: string | null): ImagePromptSource {
   if (value === "revised_prompt" || value === "cached" || value === "none") {
     return value;
@@ -585,6 +666,25 @@ function normalizeContextRole(value: string): ImageContextResult["messages"][num
     return value;
   }
   return "system";
+}
+
+function normalizePromptInferenceConfidence(value: string | null): PromptInferenceConfidence | null {
+  if (value === "low" || value === "medium" || value === "high") {
+    return value;
+  }
+  return null;
+}
+
+function parsePromptInferenceResult(value: string | null): PromptInferenceResultData | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value) as PromptInferenceResultData;
+  } catch {
+    return null;
+  }
 }
 
 function getSortAt(record: Pick<ImageRecord, "generatedAt" | "fileModifiedAt">): string {

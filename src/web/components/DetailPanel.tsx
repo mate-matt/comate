@@ -1,11 +1,59 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Copy, ExternalLink, FolderOpen } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowLeft,
+  CheckCircle2,
+  ChevronRight,
+  Clock3,
+  Copy,
+  ExternalLink,
+  FolderOpen,
+  LoaderCircle,
+  RefreshCw,
+  Sparkles,
+  X
+} from "lucide-react";
 
-import type { ImageContextResult, ImageRecord } from "../../shared/types.js";
-import { imageFileUrl, openImage } from "../api/client.js";
+import type {
+  ImageContextResult,
+  ImagePromptInferenceRecord,
+  ImageRecord,
+  PromptInferenceTaskStatus,
+  PromptInferenceTaskSummary,
+  PromptInferenceTasksResponse,
+  PromptInferenceTaskView,
+  PromptInferenceLanguage,
+  PromptInferenceTextPair
+} from "../../shared/types.js";
+import { imageFileUrl, imageThumbnailUrl, openImage } from "../api/client.js";
 import { formatBytes, formatFullDate, middleEllipsis } from "../utils/format.js";
 
 type DetailTab = "prompt" | "context" | "details";
+type DetailPanelPage = "detail" | "promptTasks";
+
+const EMPTY_PROMPT_TASKS: PromptInferenceTasksResponse = {
+  summary: {
+    active: 0,
+    canceled: 0,
+    failed: 0,
+    queued: 0,
+    ready: 0,
+    running: 0,
+    total: 0
+  },
+  tasks: []
+};
+
+const PROMPT_TASK_SECTIONS: Array<{
+  emptyLabel: string;
+  statuses: PromptInferenceTaskStatus[];
+  title: string;
+}> = [
+  { title: "Running", statuses: ["running"], emptyLabel: "No running prompt tasks." },
+  { title: "Queued", statuses: ["queued"], emptyLabel: "No queued prompt tasks." },
+  { title: "Needs attention", statuses: ["failed"], emptyLabel: "No failed prompt tasks." },
+  { title: "Recent", statuses: ["ready", "canceled"], emptyLabel: "No recent prompt tasks." }
+];
 
 interface DetailPanelProps {
   collapsed?: boolean;
@@ -13,7 +61,20 @@ interface DetailPanelProps {
   contextError?: string | null;
   contextLoading?: boolean;
   image: ImageRecord | null;
+  initialPage?: DetailPanelPage;
+  onCancelPromptTask?: (task: PromptInferenceTaskView) => void | Promise<void>;
   onCopyImage?: (image: ImageRecord) => void | Promise<void>;
+  onInferPrompt?: () => void | Promise<void>;
+  onRefreshPromptTasks?: () => void | Promise<void>;
+  onRetryPromptTask?: (task: PromptInferenceTaskView) => void | Promise<void>;
+  onViewPromptTaskImage?: (image: ImageRecord) => void;
+  promptInference?: ImagePromptInferenceRecord | null;
+  promptInferenceError?: string | null;
+  promptInferenceLoading?: boolean;
+  promptInferenceSubmitting?: boolean;
+  promptTask?: PromptInferenceTaskView | null;
+  promptTasks?: PromptInferenceTasksResponse;
+  promptTasksError?: string | null;
 }
 
 export function DetailPanel({
@@ -22,18 +83,56 @@ export function DetailPanel({
   contextError = null,
   contextLoading = false,
   image,
-  onCopyImage
+  initialPage = "detail",
+  onCancelPromptTask,
+  onCopyImage,
+  onInferPrompt,
+  onRefreshPromptTasks,
+  onRetryPromptTask,
+  onViewPromptTaskImage,
+  promptInference = null,
+  promptInferenceError = null,
+  promptInferenceLoading = false,
+  promptInferenceSubmitting = false,
+  promptTask = null,
+  promptTasks = EMPTY_PROMPT_TASKS,
+  promptTasksError = null
 }: DetailPanelProps) {
-  const [activeTab, setActiveTab] = useState<DetailTab>(() => (image?.prompt ? "prompt" : "context"));
+  const [activeTab, setActiveTab] = useState<DetailTab>("prompt");
+  const [page, setPage] = useState<DetailPanelPage>(initialPage);
 
   useEffect(() => {
     if (image) {
-      setActiveTab(image.prompt ? "prompt" : "context");
+      setActiveTab("prompt");
     }
-  }, [image?.id, image?.prompt]);
+  }, [image?.id]);
+
+  useEffect(() => {
+    setPage(initialPage);
+  }, [initialPage]);
 
   if (collapsed) {
     return <aside className="detail-panel collapsed" aria-hidden="true" />;
+  }
+
+  if (page === "promptTasks") {
+    return (
+      <aside className="detail-panel">
+        <PromptTasksPage
+          error={promptTasksError}
+          tasks={promptTasks}
+          onBack={() => setPage("detail")}
+          onCancel={onCancelPromptTask}
+          onRefresh={onRefreshPromptTasks}
+          onRetry={onRetryPromptTask}
+          onView={(task) => {
+            onViewPromptTaskImage?.(task.image);
+            setPage("detail");
+            setActiveTab("prompt");
+          }}
+        />
+      </aside>
+    );
   }
 
   if (!image) {
@@ -52,6 +151,7 @@ export function DetailPanel({
     <aside className="detail-panel">
       <DetailPreview image={image} dimensions={dimensions} />
       <DetailActions image={image} onCopyImage={onCopyImage} />
+      <PromptTasksEntry error={promptTasksError} tasks={promptTasks} onOpen={() => setPage("promptTasks")} />
 
       <div className="detail-content">
         <div className="detail-tabs" role="tablist" aria-label="Image information">
@@ -66,7 +166,18 @@ export function DetailPanel({
           role="tabpanel"
           aria-labelledby={tabLabelId}
         >
-          {activeTab === "prompt" ? <PromptPanel image={image} /> : null}
+          {activeTab === "prompt" ? (
+            <PromptPanel
+              image={image}
+              inference={promptInference}
+              inferenceError={promptInferenceError}
+              inferenceLoading={promptInferenceLoading}
+              inferenceSubmitting={promptInferenceSubmitting}
+              onInferPrompt={onInferPrompt}
+              onCancelPromptTask={onCancelPromptTask}
+              promptTask={promptTask}
+            />
+          ) : null}
           {activeTab === "context" ? (
             <ContextPanel context={context} error={contextError} loading={contextLoading} messageCount={contextMessages.length} />
           ) : null}
@@ -153,28 +264,505 @@ function DetailTabButton({
   );
 }
 
-function PromptPanel({ image }: { image: ImageRecord }) {
+function PromptTasksEntry({
+  error,
+  onOpen,
+  tasks
+}: {
+  error: string | null;
+  onOpen: () => void;
+  tasks: PromptInferenceTasksResponse;
+}) {
+  const hasTasks = tasks.summary.total > 0;
+  if (!hasTasks && !error) {
+    return null;
+  }
+
+  const active = tasks.summary.active > 0;
+  const summary = formatPromptTaskEntrySummary(tasks.summary, error);
+
+  return (
+    <button className="prompt-task-entry" type="button" aria-label="Open Codex prompt tasks" onClick={onOpen}>
+      <span className={active ? "prompt-task-entry-icon running" : error ? "prompt-task-entry-icon failed" : "prompt-task-entry-icon"}>
+        {active ? <LoaderCircle size={19} /> : error ? <AlertCircle size={18} /> : <Sparkles size={18} />}
+      </span>
+      <span className="prompt-task-entry-copy">
+        <strong>Codex prompts</strong>
+        <span>{summary}</span>
+      </span>
+      <ChevronRight size={18} />
+    </button>
+  );
+}
+
+function PromptTasksPage({
+  error,
+  onBack,
+  onCancel,
+  onRefresh,
+  onRetry,
+  onView,
+  tasks
+}: {
+  error: string | null;
+  onBack: () => void;
+  onCancel?: (task: PromptInferenceTaskView) => void | Promise<void>;
+  onRefresh?: () => void | Promise<void>;
+  onRetry?: (task: PromptInferenceTaskView) => void | Promise<void>;
+  onView: (task: PromptInferenceTaskView) => void;
+  tasks: PromptInferenceTasksResponse;
+}) {
+  return (
+    <div className="prompt-task-page">
+      <header className="prompt-task-page-header">
+        <button className="prompt-task-back" type="button" aria-label="Back to image detail" onClick={onBack}>
+          <ArrowLeft size={16} />
+        </button>
+        <div>
+          <strong>Codex prompt tasks</strong>
+          <span>{formatPromptTaskEntrySummary(tasks.summary, error)}</span>
+        </div>
+        <button
+          className="prompt-task-refresh"
+          type="button"
+          aria-label="Refresh Codex prompt tasks"
+          disabled={!onRefresh}
+          onClick={() => void onRefresh?.()}
+        >
+          <RefreshCw size={15} />
+        </button>
+      </header>
+
+      <PromptTaskSummaryBar summary={tasks.summary} />
+      {error ? <div className="prompt-task-error">{error}</div> : null}
+      {tasks.summary.total === 0 ? (
+        <div className="prompt-task-empty">
+          <Sparkles size={18} />
+          <strong>No Codex prompt tasks</strong>
+          <span>Images without exact prompts will appear here when Codex starts inferring.</span>
+        </div>
+      ) : (
+        <div className="prompt-task-sections">
+          {PROMPT_TASK_SECTIONS.map((section) => {
+            const sectionTasks = tasks.tasks.filter((task) => section.statuses.includes(task.status));
+            return (
+              <PromptTaskSection
+                key={section.title}
+                emptyLabel={section.emptyLabel}
+                tasks={sectionTasks}
+                title={section.title}
+                onCancel={onCancel}
+                onRetry={onRetry}
+                onView={onView}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PromptTaskSummaryBar({ summary }: { summary: PromptInferenceTaskSummary }) {
+  if (summary.total === 0) {
+    return null;
+  }
+
+  const chips = [
+    ["Running", summary.running],
+    ["Queued", summary.queued],
+    ["Ready", summary.ready],
+    ["Failed", summary.failed]
+  ].filter(([, count]) => Number(count) > 0);
+
+  return (
+    <div className="prompt-task-summary-bar" aria-label="Codex prompt task summary">
+      {chips.map(([label, count]) => (
+        <span key={label}>
+          <strong>{count}</strong>
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function PromptTaskSection({
+  emptyLabel,
+  onCancel,
+  onRetry,
+  onView,
+  tasks,
+  title
+}: {
+  emptyLabel: string;
+  onCancel?: (task: PromptInferenceTaskView) => void | Promise<void>;
+  onRetry?: (task: PromptInferenceTaskView) => void | Promise<void>;
+  onView: (task: PromptInferenceTaskView) => void;
+  tasks: PromptInferenceTaskView[];
+  title: string;
+}) {
+  return (
+    <section className="prompt-task-section">
+      <div className="prompt-task-section-heading">
+        <strong>{title}</strong>
+        <span>{tasks.length}</span>
+      </div>
+      {tasks.length === 0 ? (
+        <p>{emptyLabel}</p>
+      ) : (
+        <ol className="prompt-task-list">
+          {tasks.map((task) => (
+            <PromptTaskRow key={task.id} task={task} onCancel={onCancel} onRetry={onRetry} onView={onView} />
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function PromptTaskRow({
+  onCancel,
+  onRetry,
+  onView,
+  task
+}: {
+  onCancel?: (task: PromptInferenceTaskView) => void | Promise<void>;
+  onRetry?: (task: PromptInferenceTaskView) => void | Promise<void>;
+  onView: (task: PromptInferenceTaskView) => void;
+  task: PromptInferenceTaskView;
+}) {
+  return (
+    <li className={`prompt-task-row status-${task.status}`}>
+      <button className="prompt-task-thumb" type="button" aria-label="View task image" onClick={() => onView(task)}>
+        <img src={imageThumbnailUrl(task.image)} alt={task.image.threadName ?? task.image.fileName} loading="lazy" />
+      </button>
+      <div className="prompt-task-row-main">
+        <strong title={task.image.threadName ?? task.image.fileName}>{task.image.threadName ?? task.image.fileName}</strong>
+        <span>{formatPromptTaskMeta(task)}</span>
+      </div>
+      <span className={`prompt-task-status status-${task.status}`}>{getPromptTaskStatusIcon(task.status)}{getPromptTaskStatusLabel(task)}</span>
+      <div className="prompt-task-row-actions">
+        <button type="button" onClick={() => onView(task)}>
+          View
+        </button>
+        {task.status === "queued" ? (
+          <button type="button" disabled={!onCancel} onClick={() => void onCancel?.(task)}>
+            Cancel
+          </button>
+        ) : null}
+        {task.status === "failed" ? (
+          <button type="button" disabled={!onRetry} onClick={() => void onRetry?.(task)}>
+            Retry
+          </button>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+function PromptPanel({
+  image,
+  inference,
+  inferenceError,
+  inferenceLoading,
+  inferenceSubmitting,
+  onCancelPromptTask,
+  onInferPrompt,
+  promptTask
+}: {
+  image: ImageRecord;
+  inference: ImagePromptInferenceRecord | null;
+  inferenceError: string | null;
+  inferenceLoading: boolean;
+  inferenceSubmitting: boolean;
+  onCancelPromptTask?: (task: PromptInferenceTaskView) => void | Promise<void>;
+  onInferPrompt?: () => void | Promise<void>;
+  promptTask: PromptInferenceTaskView | null;
+}) {
+  const [language, setLanguage] = useState<PromptInferenceLanguage>("zh");
+  const taskBusy = promptTask?.status === "queued" || promptTask?.status === "running";
+  const busy = inferenceLoading || inferenceSubmitting || taskBusy;
+  const hasInferredPrompt = Boolean(!image.prompt && inference?.status === "ready" && inference.result);
+  const copyText = image.prompt
+    ? image.prompt
+    : hasInferredPrompt && inference
+      ? formatPromptInferenceForClipboard(inference, language)
+      : "";
+
   return (
     <>
       <div className="detail-tab-toolbar">
         <div className="detail-source-stack">
           <span>Source</span>
-          <small className={`detail-source-pill source-${image.promptSource}`}>{getPromptSourceLabel(image)}</small>
+          <small className={getPromptPillClass(image, inference, busy, inferenceError, promptTask)}>
+            {getPromptSourceLabel(image, inference, busy, inferenceError, promptTask)}
+          </small>
         </div>
+        {!image.prompt && hasInferredPrompt ? (
+          <LanguageToggle language={language} onLanguageChange={setLanguage} />
+        ) : null}
+        {!image.prompt && hasInferredPrompt ? (
+          <button
+            className="detail-inline-action"
+            disabled={busy || !onInferPrompt}
+            aria-label="Regenerate inferred prompt"
+            title="Regenerate inferred prompt"
+            onClick={() => void onInferPrompt?.()}
+          >
+            <RefreshCw size={13} />
+            {busy ? "Working" : "Again"}
+          </button>
+        ) : null}
         <button
           className="detail-copy-button"
-          disabled={!image.prompt}
+          disabled={!copyText}
           aria-label="Copy prompt"
           title="Copy prompt"
-          onClick={() => image.prompt && navigator.clipboard.writeText(image.prompt)}
+          onClick={() => copyText && navigator.clipboard.writeText(copyText)}
         >
           <Copy size={14} />
         </button>
       </div>
-      <pre className={image.prompt ? "prompt-reader" : "prompt-reader empty"}>
-        {image.prompt ?? "No exact prompt found. Nearby context may still be available."}
-      </pre>
+      <PromptBody
+        image={image}
+        inference={inference}
+        inferenceError={inferenceError}
+        inferenceLoading={inferenceLoading}
+        inferenceSubmitting={inferenceSubmitting}
+        language={language}
+        onCancelPromptTask={onCancelPromptTask}
+        onInferPrompt={onInferPrompt}
+        promptTask={promptTask}
+      />
     </>
+  );
+}
+
+function LanguageToggle({
+  language,
+  onLanguageChange
+}: {
+  language: PromptInferenceLanguage;
+  onLanguageChange: (language: PromptInferenceLanguage) => void;
+}) {
+  return (
+    <div className="prompt-language-toggle" aria-label="Prompt language">
+      <button
+        className={language === "zh" ? "active" : ""}
+        type="button"
+        aria-pressed={language === "zh"}
+        onClick={() => onLanguageChange("zh")}
+      >
+        中文
+      </button>
+      <button
+        className={language === "en" ? "active" : ""}
+        type="button"
+        aria-pressed={language === "en"}
+        onClick={() => onLanguageChange("en")}
+      >
+        English
+      </button>
+    </div>
+  );
+}
+
+function PromptBody({
+  image,
+  inference,
+  inferenceError,
+  inferenceLoading,
+  inferenceSubmitting,
+  language,
+  onCancelPromptTask,
+  onInferPrompt,
+  promptTask
+}: {
+  image: ImageRecord;
+  inference: ImagePromptInferenceRecord | null;
+  inferenceError: string | null;
+  inferenceLoading: boolean;
+  inferenceSubmitting: boolean;
+  language: PromptInferenceLanguage;
+  onCancelPromptTask?: (task: PromptInferenceTaskView) => void | Promise<void>;
+  onInferPrompt?: () => void | Promise<void>;
+  promptTask: PromptInferenceTaskView | null;
+}) {
+  if (image.prompt) {
+    return <pre className="prompt-reader">{image.prompt}</pre>;
+  }
+
+  if (promptTask?.status === "queued") {
+    return (
+      <div className="prompt-inference-state working">
+        <Clock3 size={19} />
+        <strong>Queued for Codex</strong>
+        <span>{promptTask.position ? `Queue position #${promptTask.position}` : "Waiting for the current prompt task to finish."}</span>
+        <button type="button" disabled={!onCancelPromptTask} onClick={() => void onCancelPromptTask?.(promptTask)}>
+          <X size={13} />
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  if (promptTask?.status === "running" || inferenceLoading || inferenceSubmitting) {
+    return (
+      <div className="prompt-inference-state working">
+        <LoaderCircle className="spin" size={20} />
+        <strong>Codex is inferring...</strong>
+        <span>Building a structured bilingual prompt from the local image.</span>
+      </div>
+    );
+  }
+
+  if (inference?.status === "ready" && inference.result) {
+    return <PromptInferenceReader inference={inference} language={language} />;
+  }
+
+  if (inferenceError || inference?.status === "failed") {
+    return (
+      <div className="prompt-inference-state error">
+        <strong>Inference failed</strong>
+        <span>{inferenceError ?? inference?.error ?? "Codex prompt inference failed."}</span>
+        <button type="button" disabled={!onInferPrompt} onClick={() => void onInferPrompt?.()}>
+          <RefreshCw size={13} />
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="prompt-inference-state empty">
+      <strong>No exact prompt found</strong>
+      <span>Use Codex to infer a structured bilingual prompt from this local image.</span>
+      <button type="button" disabled={!onInferPrompt} onClick={() => void onInferPrompt?.()}>
+        <Sparkles size={13} />
+        Infer prompt
+      </button>
+    </div>
+  );
+}
+
+function formatPromptTaskEntrySummary(summary: PromptInferenceTaskSummary, error: string | null): string {
+  if (error) {
+    return "Unable to load tasks";
+  }
+  if (summary.active > 0) {
+    return `${summary.running} running · ${summary.queued} queued`;
+  }
+  if (summary.failed > 0) {
+    return `${summary.failed} needs attention · ${summary.ready} ready`;
+  }
+  if (summary.ready > 0) {
+    return `${summary.ready} ready`;
+  }
+  if (summary.canceled > 0) {
+    return `${summary.canceled} canceled`;
+  }
+  return "No tasks";
+}
+
+function formatPromptTaskMeta(task: PromptInferenceTaskView): string {
+  if (task.status === "queued") {
+    return task.position ? `Queue #${task.position} · ${formatFullDate(task.queuedAt)}` : `Queued · ${formatFullDate(task.queuedAt)}`;
+  }
+  if (task.status === "running") {
+    return task.startedAt ? `Started ${formatFullDate(task.startedAt)}` : "Running";
+  }
+  if (task.status === "failed") {
+    return task.error ? middleEllipsis(task.error, 52) : "Inference failed";
+  }
+  if (task.status === "canceled") {
+    return "Canceled";
+  }
+  return task.inference?.model ? `Ready · ${task.inference.model}` : "Ready";
+}
+
+function getPromptTaskStatusLabel(task: PromptInferenceTaskView): string {
+  if (task.status === "queued") {
+    return task.position ? `Queued #${task.position}` : "Queued";
+  }
+  if (task.status === "running") {
+    return "Running";
+  }
+  if (task.status === "ready") {
+    return "Ready";
+  }
+  if (task.status === "failed") {
+    return "Failed";
+  }
+  return "Canceled";
+}
+
+function getPromptTaskStatusIcon(status: PromptInferenceTaskStatus): ReactNode {
+  if (status === "running") {
+    return <LoaderCircle className="spin" size={12} />;
+  }
+  if (status === "queued") {
+    return <Clock3 size={12} />;
+  }
+  if (status === "ready") {
+    return <CheckCircle2 size={12} />;
+  }
+  if (status === "failed") {
+    return <AlertCircle size={12} />;
+  }
+  return <X size={12} />;
+}
+
+function PromptInferenceReader({
+  inference,
+  language
+}: {
+  inference: ImagePromptInferenceRecord;
+  language: PromptInferenceLanguage;
+}) {
+  const result = inference.result;
+  if (!result) {
+    return <div className="prompt-inference-state">No inferred prompt.</div>;
+  }
+
+  return (
+    <div className="prompt-inference-reader">
+      <section className="prompt-inference-main">
+        <h3>Prompt</h3>
+        <p>{result.prompt[language]}</p>
+      </section>
+      {result.negativePrompt ? (
+        <section className="prompt-inference-main quiet">
+          <h3>Negative</h3>
+          <p>{result.negativePrompt[language]}</p>
+        </section>
+      ) : null}
+      <div className="prompt-inference-structure">
+        <PromptInferenceField label="Subject" value={result.structure.subject} language={language} />
+        <PromptInferenceField label="Style" value={result.structure.style} language={language} />
+        <PromptInferenceField label="Composition" value={result.structure.composition} language={language} />
+        <PromptInferenceField label="Lighting" value={result.structure.lighting} language={language} />
+        <PromptInferenceField label="Color" value={result.structure.colorPalette} language={language} />
+        <PromptInferenceField label="Technical" value={result.structure.technicalNotes} language={language} />
+      </div>
+    </div>
+  );
+}
+
+function PromptInferenceField({
+  label,
+  language,
+  value
+}: {
+  label: string;
+  language: PromptInferenceLanguage;
+  value: PromptInferenceTextPair;
+}) {
+  return (
+    <section className="prompt-inference-field">
+      <h3>{label}</h3>
+      <p>{value[language]}</p>
+    </section>
   );
 }
 
@@ -329,14 +917,88 @@ function getTabLabel(tab: DetailTab): string {
   return "Details";
 }
 
-function getPromptSourceLabel(image: ImageRecord): string {
+function getPromptSourceLabel(
+  image: ImageRecord,
+  inference: ImagePromptInferenceRecord | null,
+  loading: boolean,
+  error: string | null,
+  task: PromptInferenceTaskView | null = null
+): string {
   if (image.promptSource === "revised_prompt") {
     return "Exact prompt";
   }
   if (image.promptSource === "cached") {
     return "Cached prompt";
   }
+  if (task?.status === "queued") {
+    return "Queued";
+  }
+  if (task?.status === "running") {
+    return "Inferring";
+  }
+  if (loading) {
+    return "Inferring";
+  }
+  if (error || inference?.status === "failed") {
+    return "Inference failed";
+  }
+  if (inference?.status === "ready") {
+    return "Codex inferred";
+  }
   return "No prompt";
+}
+
+function getPromptPillClass(
+  image: ImageRecord,
+  inference: ImagePromptInferenceRecord | null,
+  loading: boolean,
+  error: string | null,
+  task: PromptInferenceTaskView | null = null
+): string {
+  if (image.prompt) {
+    return `detail-source-pill source-${image.promptSource}`;
+  }
+  if (task?.status === "queued") {
+    return "detail-source-pill prompt-inference-queued";
+  }
+  if (task?.status === "running") {
+    return "detail-source-pill prompt-inference-loading";
+  }
+  if (loading) {
+    return "detail-source-pill prompt-inference-loading";
+  }
+  if (error || inference?.status === "failed") {
+    return "detail-source-pill prompt-inference-failed";
+  }
+  if (inference?.status === "ready") {
+    return "detail-source-pill prompt-inference-ready";
+  }
+  return "detail-source-pill source-none";
+}
+
+function formatPromptInferenceForClipboard(
+  inference: ImagePromptInferenceRecord,
+  language: PromptInferenceLanguage
+): string {
+  const result = inference.result;
+  if (!result) {
+    return "";
+  }
+
+  const lines = [
+    "Prompt",
+    result.prompt[language],
+    result.negativePrompt ? `\nNegative\n${result.negativePrompt[language]}` : "",
+    "\nStructure",
+    `Subject: ${result.structure.subject[language]}`,
+    `Style: ${result.structure.style[language]}`,
+    `Composition: ${result.structure.composition[language]}`,
+    `Lighting: ${result.structure.lighting[language]}`,
+    `Color: ${result.structure.colorPalette[language]}`,
+    `Technical: ${result.structure.technicalNotes[language]}`
+  ].filter(Boolean);
+
+  return lines.join("\n");
 }
 
 function getContextSourceLabel(

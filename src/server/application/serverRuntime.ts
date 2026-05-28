@@ -9,11 +9,13 @@ import { CodexImageScanner } from "../infrastructure/codexImageScanner.js";
 import { CodexSessionRepository } from "../infrastructure/codexSessionRepository.js";
 import { FileLauncher } from "../infrastructure/fileLauncher.js";
 import { createDefaultImageThumbnailService } from "../infrastructure/imageThumbnailService.js";
+import { CodexCliPromptInferenceRunner } from "../infrastructure/codexPromptInferenceRunner.js";
 import { SqliteImageIndex } from "../infrastructure/sqliteImageIndex.js";
 import { IndexingService } from "./indexingService.js";
 import { LibraryService } from "./libraryService.js";
+import { PromptInferenceService } from "./promptInferenceService.js";
 import type { ReindexResult } from "../../shared/types.js";
-import type { ImageClipboardService, ImageThumbnailService } from "../domain/types.js";
+import type { CodexPromptInferenceRunner, ImageClipboardService, ImageThumbnailService } from "../domain/types.js";
 
 export interface CoMateRuntime {
   close: () => Promise<void>;
@@ -28,6 +30,8 @@ export interface StartCoMateRuntimeOptions {
   codexPaths?: Partial<CodexPaths>;
   host?: string;
   imageClipboard?: ImageClipboardService;
+  promptInferenceRunner?: CodexPromptInferenceRunner;
+  promptInferenceTimeoutMs?: number;
   thumbnails?: ImageThumbnailService;
   port: number;
   staticDir: string | null;
@@ -43,6 +47,11 @@ export async function startCoMateRuntime(options: StartCoMateRuntimeOptions): Pr
     index
   );
   const indexing = new IndexingService(library, () => detectCodexDesktopData(codexPaths));
+  const promptInference = new PromptInferenceService(
+    index,
+    options.promptInferenceRunner ?? new CodexCliPromptInferenceRunner(),
+    options.promptInferenceTimeoutMs
+  );
 
   try {
     const initialIndex = indexing.startInitialIndex();
@@ -53,6 +62,7 @@ export async function startCoMateRuntime(options: StartCoMateRuntimeOptions): Pr
       index,
       indexing,
       launcher: new FileLauncher(),
+      promptInference,
       staticDir: options.staticDir,
       thumbnails: options.thumbnails ?? createDefaultImageThumbnailService(codexPaths.thumbnailCacheDir)
     });

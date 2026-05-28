@@ -5,15 +5,22 @@ import type {
   CapabilityScanResult,
   DatePreset,
   ImageContextResult,
+  ImagePromptInferenceRecord,
   ImageRecord,
   ImageSearchResult,
+  PromptInferenceTasksResponse,
+  PromptInferenceTaskView,
   PromptState,
   RuntimeStatus
 } from "../shared/types.js";
 import {
+  cancelPromptInferenceTask,
+  enqueueImagePromptInferenceTask,
   fetchCapabilities,
   fetchImageContext,
+  fetchImagePromptInference,
   fetchImages,
+  fetchPromptInferenceTasks,
   fetchRuntimeStatus,
   copyImageToNativeClipboard,
   openCapabilityPath,
@@ -42,6 +49,7 @@ import {
   getImageClipboardRuntime,
   shouldHandleImageCopyShortcut
 } from "./domain/imageClipboard.js";
+import { ensureImageInResult } from "./domain/imageSelection.js";
 import { type AppModule, type CapabilitySection, getModuleTitle } from "./domain/navigation.js";
 import {
   getImageWorkspaceHeader,
@@ -63,6 +71,19 @@ const EMPTY_RESULT: ImageSearchResult = {
     withPrompt: 0,
     withoutPrompt: 0
   }
+};
+
+const EMPTY_PROMPT_TASKS: PromptInferenceTasksResponse = {
+  summary: {
+    active: 0,
+    canceled: 0,
+    failed: 0,
+    queued: 0,
+    ready: 0,
+    running: 0,
+    total: 0
+  },
+  tasks: []
 };
 
 export function App() {
@@ -93,6 +114,12 @@ export function App() {
   const [imageContextLoading, setImageContextLoading] = useState(false);
   const [imageContextError, setImageContextError] = useState<string | null>(null);
   const [imageContextCacheEpoch, setImageContextCacheEpoch] = useState(0);
+  const [promptInference, setPromptInference] = useState<ImagePromptInferenceRecord | null>(null);
+  const [promptInferenceLoading, setPromptInferenceLoading] = useState(false);
+  const [promptInferenceError, setPromptInferenceError] = useState<string | null>(null);
+  const [promptInferenceSubmitting, setPromptInferenceSubmitting] = useState(false);
+  const [promptTasks, setPromptTasks] = useState<PromptInferenceTasksResponse>(EMPTY_PROMPT_TASKS);
+  const [promptTasksError, setPromptTasksError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextImageOffset, setNextImageOffset] = useState(0);
@@ -104,10 +131,38 @@ export function App() {
   );
   const imageQueryKeyRef = useRef(imageQueryKey);
   const imageContextCacheRef = useRef(new Map<string, ImageContextResult>());
+  const promptInferenceCacheRef = useRef(new Map<string, ImagePromptInferenceRecord | null>());
+  const selectedIdRef = useRef<string | null>(selectedId);
 
   useEffect(() => {
     imageQueryKeyRef.current = imageQueryKey;
   }, [imageQueryKey]);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  const commitPromptTasks = useCallback((nextTasks: PromptInferenceTasksResponse): void => {
+    setPromptTasks(nextTasks);
+    setPromptTasksError(null);
+
+    for (const task of nextTasks.tasks) {
+      if (task.inference) {
+        promptInferenceCacheRef.current.set(task.imageId, task.inference);
+      }
+    }
+
+    const currentTask = getPromptTaskForImage(nextTasks.tasks, selectedIdRef.current);
+    if (currentTask?.inference) {
+      setPromptInference(currentTask.inference);
+      setPromptInferenceError(currentTask.status === "failed" ? currentTask.error : null);
+    }
+  }, []);
+
+  const refreshPromptTasks = useCallback(async (signal?: AbortSignal): Promise<void> => {
+    const nextTasks = await fetchPromptInferenceTasks(signal);
+    commitPromptTasks(nextTasks);
+  }, [commitPromptTasks]);
 
   useEffect(() => {
     let cancelled = false;
@@ -180,6 +235,34 @@ export function App() {
 
     return () => controller.abort();
   }, [activeModule, capabilities]);
+
+  useEffect(() => {
+    if (activeModule !== "gallery") {
+      return;
+    }
+
+    const controller = new AbortController();
+    refreshPromptTasks(controller.signal).catch((nextError) => {
+      if (nextError.name !== "AbortError") {
+        setPromptTasksError(nextError instanceof Error ? nextError.message : "Unable to load Codex prompt tasks.");
+      }
+    });
+    return () => controller.abort();
+  }, [activeModule, refreshPromptTasks]);
+
+  useEffect(() => {
+    if (activeModule !== "gallery" || !shouldPollPromptTasks(promptTasks)) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      refreshPromptTasks().catch((nextError) => {
+        setPromptTasksError(nextError instanceof Error ? nextError.message : "Unable to load Codex prompt tasks.");
+      });
+    }, promptTasks.summary.active > 0 ? 1_000 : 5_000);
+
+    return () => window.clearTimeout(timer);
+  }, [activeModule, promptTasks, refreshPromptTasks]);
 
   useEffect(() => {
     const handle = window.setTimeout(() => setDebouncedQuery(query), 180);
@@ -283,6 +366,52 @@ export function App() {
   }, [activeModule, imageContextCacheEpoch, selectedImage?.id]);
 
   useEffect(() => {
+    if (activeModule !== "gallery" || !selectedImage || selectedImage.hasPrompt) {
+      setPromptInference(null);
+      setPromptInferenceLoading(false);
+      setPromptInferenceError(null);
+      return;
+    }
+
+    if (promptInferenceCacheRef.current.has(selectedImage.id)) {
+      const cachedInference = promptInferenceCacheRef.current.get(selectedImage.id) ?? null;
+      setPromptInference(cachedInference);
+      setPromptInferenceLoading(false);
+      setPromptInferenceError(cachedInference?.status === "failed" ? cachedInference.error : null);
+      return;
+    }
+
+    const controller = new AbortController();
+    setPromptInference(null);
+    setPromptInferenceLoading(true);
+    setPromptInferenceError(null);
+
+    fetchImagePromptInference(selectedImage.id, controller.signal)
+      .then((response) => {
+        promptInferenceCacheRef.current.set(selectedImage.id, response.inference);
+        setPromptInference(response.inference);
+        setPromptInferenceError(response.inference?.status === "failed" ? response.inference.error : null);
+      })
+      .catch((nextError) => {
+        if (nextError.name !== "AbortError") {
+          setPromptInferenceError(nextError instanceof Error ? nextError.message : "Unable to load inferred prompt.");
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setPromptInferenceLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [activeModule, selectedImage?.id, selectedImage?.hasPrompt]);
+
+  const selectedPromptTask = useMemo(
+    () => getPromptTaskForImage(promptTasks.tasks, selectedImage?.id ?? null),
+    [promptTasks.tasks, selectedImage?.id]
+  );
+
+  useEffect(() => {
     if (!selectedId || result.items.some((image) => image.id === selectedId)) {
       return;
     }
@@ -382,6 +511,8 @@ export function App() {
     setError(null);
     setLoadingMore(false);
     imageContextCacheRef.current.clear();
+    promptInferenceCacheRef.current.clear();
+    setPromptTasks(EMPTY_PROMPT_TASKS);
     setImageContextCacheEpoch((current) => current + 1);
     try {
       await reindexLibrary();
@@ -500,6 +631,54 @@ export function App() {
     setSelectedId(image.id);
   }
 
+  async function handleInferSelectedPrompt(): Promise<void> {
+    if (!selectedImage || selectedImage.hasPrompt) {
+      return;
+    }
+
+    const imageId = selectedImage.id;
+    setPromptInferenceSubmitting(true);
+    setPromptInferenceError(null);
+
+    try {
+      await enqueueImagePromptInferenceTask(imageId, promptInference?.status === "ready");
+      await refreshPromptTasks();
+    } catch (nextError) {
+      if (selectedIdRef.current === imageId) {
+        setPromptInferenceError(nextError instanceof Error ? nextError.message : "Prompt inference failed.");
+      }
+    } finally {
+      if (selectedIdRef.current === imageId) {
+        setPromptInferenceSubmitting(false);
+      }
+    }
+  }
+
+  async function handleCancelPromptTask(taskId: string): Promise<void> {
+    try {
+      await cancelPromptInferenceTask(taskId);
+      await refreshPromptTasks();
+    } catch (nextError) {
+      setPromptTasksError(nextError instanceof Error ? nextError.message : "Unable to cancel Codex prompt task.");
+    }
+  }
+
+  async function handleRetryPromptTask(image: ImageRecord): Promise<void> {
+    try {
+      await enqueueImagePromptInferenceTask(image.id, true);
+      await refreshPromptTasks();
+      setSelectedId(image.id);
+    } catch (nextError) {
+      setPromptTasksError(nextError instanceof Error ? nextError.message : "Unable to retry Codex prompt task.");
+    }
+  }
+
+  function handleViewPromptTaskImage(image: ImageRecord): void {
+    setResult((current) => ensureImageInResult(current, image));
+    setSelectedId(image.id);
+    setRightPanelState("expanded");
+  }
+
   function selectCapability(capability: CapabilityRecord): void {
     setSelectedCapabilityId(capability.id);
   }
@@ -603,6 +782,18 @@ export function App() {
             contextLoading={imageContextLoading}
             image={selectedImage}
             onCopyImage={() => void handleCopySelectedImage()}
+            onCancelPromptTask={(task) => void handleCancelPromptTask(task.id)}
+            onInferPrompt={() => void handleInferSelectedPrompt()}
+            onRetryPromptTask={(task) => void handleRetryPromptTask(task.image)}
+            onViewPromptTaskImage={handleViewPromptTaskImage}
+            promptInference={selectedPromptTask?.inference ?? promptInference}
+            promptInferenceError={selectedPromptTask?.status === "failed" ? selectedPromptTask.error : promptInferenceError}
+            promptInferenceLoading={promptInferenceLoading}
+            promptInferenceSubmitting={promptInferenceSubmitting}
+            promptTask={selectedPromptTask}
+            promptTasks={promptTasks}
+            promptTasksError={promptTasksError}
+            onRefreshPromptTasks={() => void refreshPromptTasks()}
           />
         ) : (
           <CapabilityInspector
@@ -640,6 +831,28 @@ function isLibraryReady(status: RuntimeStatus | null): boolean {
 
 function shouldPollStatus(status: RuntimeStatus): boolean {
   return status.indexing.state === "idle" || status.indexing.state === "indexing";
+}
+
+function shouldPollPromptTasks(tasks: PromptInferenceTasksResponse): boolean {
+  return tasks.summary.active > 0;
+}
+
+function getPromptTaskForImage(
+  tasks: PromptInferenceTaskView[],
+  imageId: string | null
+): PromptInferenceTaskView | null {
+  if (!imageId) {
+    return null;
+  }
+
+  const imageTasks = tasks.filter((task) => task.imageId === imageId);
+  return (
+    imageTasks.find((task) => task.status === "running") ??
+    imageTasks.find((task) => task.status === "queued") ??
+    imageTasks.find((task) => task.status === "failed") ??
+    imageTasks.find((task) => task.status === "ready") ??
+    null
+  );
 }
 
 function getStartupMode(status: RuntimeStatus | null, statusError: string | null): StartupScreenMode | null {

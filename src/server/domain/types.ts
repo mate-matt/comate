@@ -1,4 +1,14 @@
-import type { ImageContextResult, ImageContextRole, ImageCopyResult, ImageRecord, IndexingProgress } from "../../shared/types.js";
+import type {
+  CodexAgentStatus,
+  ImageContextResult,
+  ImageContextRole,
+  ImageCopyResult,
+  ImagePromptInferenceRecord,
+  ImageRecord,
+  IndexingProgress,
+  PromptInferenceConfidence,
+  PromptInferenceResultData
+} from "../../shared/types.js";
 
 export interface CodexPaths {
   codexRoot: string;
@@ -66,9 +76,11 @@ export interface ImageIndexStore {
   search(params: import("../../shared/types.js").ImageSearchParams): import("../../shared/types.js").ImageSearchResult;
   getById(id: string): ImageRecord | null;
   getImageContext(imageId: string): ImageContextResult | null;
+  getPromptInference(imageId: string): ImagePromptInferenceRecord | null;
   listAll(): ImageRecord[];
   replaceImageContext(context: ImageContextResult): void;
   replaceImageContexts(contexts: ImageContextResult[]): void;
+  replacePromptInference(inference: ImagePromptInferenceRecord): void;
   count(): number;
   close(): void;
 }
@@ -84,4 +96,21 @@ export interface ImageThumbnail {
 
 export interface ImageThumbnailService {
   getThumbnail(record: ImageRecord): Promise<ImageThumbnail>;
+}
+
+export interface CodexPromptInferenceInput {
+  context: ImageContextResult | null;
+  image: ImageRecord;
+  timeoutMs: number;
+}
+
+export interface CodexPromptInferenceOutput {
+  confidence: PromptInferenceConfidence;
+  model: string | null;
+  result: PromptInferenceResultData;
+}
+
+export interface CodexPromptInferenceRunner {
+  checkHealth(): Promise<CodexAgentStatus>;
+  inferPrompt(input: CodexPromptInferenceInput): Promise<CodexPromptInferenceOutput>;
 }

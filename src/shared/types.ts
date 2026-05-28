@@ -4,6 +4,11 @@ export type ImagePromptSource = "revised_prompt" | "cached" | "none";
 export type ImageContextRole = "user" | "assistant" | "system" | "tool";
 export type ImageContextSource = "live_log" | "cached";
 export type ImageContextStatus = "available" | "cached" | "unavailable";
+export type PromptInferenceConfidence = "low" | "medium" | "high";
+export type PromptInferenceLanguage = "zh" | "en";
+export type PromptInferenceSource = "codex_agent";
+export type PromptInferenceStatus = "ready" | "failed";
+export type PromptInferenceTaskStatus = "queued" | "running" | "ready" | "failed" | "canceled";
 
 export interface ImageRecord {
   id: string;
@@ -40,6 +45,85 @@ export interface ImageContextResult {
   source: ImageContextSource | null;
   capturedAt: string | null;
   messages: ImageContextMessage[];
+}
+
+export interface PromptInferenceTextPair {
+  zh: string;
+  en: string;
+}
+
+export interface PromptInferenceStructure {
+  subject: PromptInferenceTextPair;
+  style: PromptInferenceTextPair;
+  composition: PromptInferenceTextPair;
+  lighting: PromptInferenceTextPair;
+  colorPalette: PromptInferenceTextPair;
+  technicalNotes: PromptInferenceTextPair;
+}
+
+export interface PromptInferenceResultData {
+  prompt: PromptInferenceTextPair;
+  negativePrompt: PromptInferenceTextPair | null;
+  structure: PromptInferenceStructure;
+}
+
+export interface ImagePromptInferenceRecord {
+  imageId: string;
+  status: PromptInferenceStatus;
+  source: PromptInferenceSource;
+  model: string | null;
+  confidence: PromptInferenceConfidence | null;
+  result: PromptInferenceResultData | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CodexAgentStatus {
+  available: boolean;
+  checkedAt: string;
+  executablePath: string | null;
+  version: string | null;
+  supportsImages: boolean;
+  error: string | null;
+}
+
+export interface ImagePromptInferenceResponse {
+  inference: ImagePromptInferenceRecord | null;
+}
+
+export interface PromptInferenceTaskView {
+  id: string;
+  imageId: string;
+  image: ImageRecord;
+  status: PromptInferenceTaskStatus;
+  position: number | null;
+  queuedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+  regenerate: boolean;
+  inference: ImagePromptInferenceRecord | null;
+  error: string | null;
+}
+
+export interface PromptInferenceTaskSummary {
+  active: number;
+  canceled: number;
+  failed: number;
+  queued: number;
+  ready: number;
+  running: number;
+  total: number;
+}
+
+export interface PromptInferenceTasksResponse {
+  summary: PromptInferenceTaskSummary;
+  tasks: PromptInferenceTaskView[];
+}
+
+export interface PromptInferenceTaskResponse {
+  task: PromptInferenceTaskView;
 }
 
 export interface SessionFacet {

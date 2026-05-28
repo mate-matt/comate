@@ -2,9 +2,12 @@ import type {
   CapabilityScanResult,
   ImageContextResult,
   ImageCopyResult,
+  ImagePromptInferenceResponse,
   ImageRecord,
   ImageSearchParams,
   ImageSearchResult,
+  PromptInferenceTaskResponse,
+  PromptInferenceTasksResponse,
   ReindexResult,
   RuntimeStatus
 } from "../../shared/types.js";
@@ -30,6 +33,51 @@ export async function fetchImages(params: ImageSearchParams, signal?: AbortSigna
 export async function fetchImageContext(id: string, signal?: AbortSignal): Promise<ImageContextResult> {
   const response = await fetch(`/api/images/${encodeURIComponent(id)}/context`, { signal });
   return readJson<ImageContextResult>(response);
+}
+
+export async function fetchImagePromptInference(
+  id: string,
+  signal?: AbortSignal
+): Promise<ImagePromptInferenceResponse> {
+  const response = await fetch(`/api/images/${encodeURIComponent(id)}/prompt-inference`, { signal });
+  return readJson<ImagePromptInferenceResponse>(response);
+}
+
+export async function inferImagePrompt(id: string, regenerate = false): Promise<ImagePromptInferenceResponse> {
+  const response = await fetch(`/api/images/${encodeURIComponent(id)}/prompt-inference`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ regenerate })
+  });
+  return readJson<ImagePromptInferenceResponse>(response);
+}
+
+export async function fetchPromptInferenceTasks(signal?: AbortSignal): Promise<PromptInferenceTasksResponse> {
+  const response = await fetch("/api/prompt-inference/tasks", { signal });
+  return readJson<PromptInferenceTasksResponse>(response);
+}
+
+export async function enqueueImagePromptInferenceTask(
+  id: string,
+  regenerate = false
+): Promise<PromptInferenceTaskResponse> {
+  const response = await fetch(`/api/images/${encodeURIComponent(id)}/prompt-inference/tasks`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ regenerate })
+  });
+  return readJson<PromptInferenceTaskResponse>(response);
+}
+
+export async function cancelPromptInferenceTask(id: string): Promise<PromptInferenceTaskResponse> {
+  const response = await fetch(`/api/prompt-inference/tasks/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+  return readJson<PromptInferenceTaskResponse>(response);
 }
 
 export async function reindexLibrary(): Promise<ReindexResult> {

@@ -3,10 +3,17 @@ import path from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { URL } from "node:url";
 
-import type { DatePreset, ImageSearchParams, PromptState } from "../../shared/types.js";
+import type {
+  DatePreset,
+  ImagePromptInferenceResponse,
+  ImageSearchParams,
+  PromptInferenceTaskResponse,
+  PromptState
+} from "../../shared/types.js";
 import type { CodexPaths, ImageClipboardService, ImageIndexStore, ImageThumbnailService } from "../domain/types.js";
 import { createUnavailableContext } from "../application/imageContextService.js";
 import type { IndexingService } from "../application/indexingService.js";
+import { PromptInferenceService, PromptInferenceServiceError } from "../application/promptInferenceService.js";
 import type { CodexCapabilityScanner } from "../infrastructure/codexCapabilityScanner.js";
 import { FileLauncher, type FileLaunchAction } from "../infrastructure/fileLauncher.js";
 import { getImageContentType } from "../infrastructure/imageThumbnailService.js";
@@ -20,6 +27,7 @@ interface CreateServerOptions {
   index: ImageIndexStore;
   indexing: IndexingService;
   launcher: FileLauncher;
+  promptInference: PromptInferenceService;
   staticDir: string | null;
   thumbnails: ImageThumbnailService;
 }
@@ -30,6 +38,10 @@ interface OpenBody {
 
 interface CapabilityOpenBody extends OpenBody {
   path?: string;
+}
+
+interface PromptInferenceBody {
+  regenerate?: boolean;
 }
 
 export function createCoMateServer(options: CreateServerOptions): Server {
@@ -107,6 +119,17 @@ async function handleApiRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/prompt-inference/tasks") {
+    sendJson(response, 200, options.promptInference.listTasks());
+    return;
+  }
+
+  const promptTaskMatch = url.pathname.match(/^\/api\/prompt-inference\/tasks\/([^/]+)$/);
+  if (request.method === "DELETE" && promptTaskMatch) {
+    cancelPromptInferenceTask(options.promptInference, decodeURIComponent(promptTaskMatch[1]!), response);
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/capabilities/open") {
     const body = await readJsonBody<CapabilityOpenBody>(request);
     if (body.action !== "openFile" && body.action !== "revealFile") {
@@ -143,6 +166,25 @@ async function handleApiRequest(
   const imageContextMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/context$/);
   if (request.method === "GET" && imageContextMatch) {
     sendImageContext(options.index, decodeURIComponent(imageContextMatch[1]!), response);
+    return;
+  }
+
+  const imagePromptInferenceMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/prompt-inference$/);
+  if (request.method === "GET" && imagePromptInferenceMatch) {
+    sendPromptInference(options.promptInference, decodeURIComponent(imagePromptInferenceMatch[1]!), response);
+    return;
+  }
+
+  if (request.method === "POST" && imagePromptInferenceMatch) {
+    const body = await readJsonBody<PromptInferenceBody>(request);
+    await inferPrompt(options.promptInference, decodeURIComponent(imagePromptInferenceMatch[1]!), body, response);
+    return;
+  }
+
+  const imagePromptInferenceTaskMatch = url.pathname.match(/^\/api\/images\/([^/]+)\/prompt-inference\/tasks$/);
+  if (request.method === "POST" && imagePromptInferenceTaskMatch) {
+    const body = await readJsonBody<PromptInferenceBody>(request);
+    enqueuePromptInferenceTask(options.promptInference, decodeURIComponent(imagePromptInferenceTaskMatch[1]!), body, response);
     return;
   }
 
@@ -291,6 +333,64 @@ function sendImageContext(index: ImageIndexStore, id: string, response: ServerRe
   }
 
   sendJson(response, 200, cachedContext);
+}
+
+function sendPromptInference(service: PromptInferenceService, id: string, response: ServerResponse): void {
+  try {
+    sendJson(response, 200, { inference: service.get(id) } satisfies ImagePromptInferenceResponse);
+  } catch (error) {
+    sendPromptInferenceError(response, error);
+  }
+}
+
+function enqueuePromptInferenceTask(
+  service: PromptInferenceService,
+  id: string,
+  body: PromptInferenceBody,
+  response: ServerResponse
+): void {
+  try {
+    const task = service.enqueue(id, { regenerate: body.regenerate === true });
+    sendJson(response, 202, { task } satisfies PromptInferenceTaskResponse);
+  } catch (error) {
+    sendPromptInferenceError(response, error);
+  }
+}
+
+function cancelPromptInferenceTask(
+  service: PromptInferenceService,
+  id: string,
+  response: ServerResponse
+): void {
+  try {
+    const task = service.cancel(id);
+    sendJson(response, 200, { task } satisfies PromptInferenceTaskResponse);
+  } catch (error) {
+    sendPromptInferenceError(response, error);
+  }
+}
+
+async function inferPrompt(
+  service: PromptInferenceService,
+  id: string,
+  body: PromptInferenceBody,
+  response: ServerResponse
+): Promise<void> {
+  try {
+    const inference = await service.infer(id, { regenerate: body.regenerate === true });
+    sendJson(response, 200, { inference } satisfies ImagePromptInferenceResponse);
+  } catch (error) {
+    sendPromptInferenceError(response, error);
+  }
+}
+
+function sendPromptInferenceError(response: ServerResponse, error: unknown): void {
+  if (error instanceof PromptInferenceServiceError) {
+    sendError(response, error.statusCode, error.message);
+    return;
+  }
+
+  sendError(response, 500, error instanceof Error ? error.message : "Prompt inference failed.");
 }
 
 function readEnum<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
